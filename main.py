@@ -7,16 +7,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from opendss_environment import EnvironmentConfig, MicrogridEnv
+from opendss_environment import Action, EnvironmentConfig, EVSEAction, MicrogridEnv
 from opendss_environment.results_scripts.summary import save_summary
 
 
 ROOT = Path(__file__).resolve().parent
-CASE = ROOT / "data" / "switzerland" / "5bus" / "config_unbalanced.json"
-EPISODE_STEPS = None  # None runs the entire remaining period; 96 runs one day.
+USE_EV = False
+CASE_NAME = "config_unbalanced_ev.json" if USE_EV else "config_unbalanced.json"
+CASE = ROOT / "data" / "switzerland" / "5bus" / CASE_NAME
+EPISODE_STEPS = 96 if USE_EV else None
 START_STEP = 0
 SEED = 42
-OUTPUT = ROOT / "results" / "5bus_unbalanced"
+CONTROLLED_EV_POWER_PU = None  # None keeps controlled EVSEs idle; e.g. 0.022.
+OUTPUT = ROOT / "results" / ("5bus_unbalanced_ev" if USE_EV else "5bus_unbalanced")
 PHASE_COLORS = {"a": "tab:red", "b": "tab:blue", "c": "tab:green"}
 BLOCK_STEPS = 96
 
@@ -90,7 +93,7 @@ def main():
         raise ValueError("BLOCK_STEPS must be positive")
     env = MicrogridEnv(EnvironmentConfig(CASE, episode_steps=EPISODE_STEPS, start_step=START_STEP))
     total_steps = env.episode_steps
-    if env.bess_list or env.pv_list:
+    if (env.bess_list or env.pv_list or env.evse_list) and total_steps > BLOCK_STEPS:
         raise ValueError("Independent blocks require a loads-only case")
     env.episode_steps = min(BLOCK_STEPS, total_steps)
     env.num_episodes = (total_steps + BLOCK_STEPS - 1) // BLOCK_STEPS
@@ -107,7 +110,13 @@ def main():
             episode_idx = offset // BLOCK_STEPS
         env.reset(seed=SEED, options={"episode_idx": episode_idx})
         for _ in range(count):
-            _, _, _, _, info = env.step(None)
+            action = None
+            if CONTROLLED_EV_POWER_PU is not None and env.evse_list:
+                action = Action(evse={
+                    evse.id: EVSEAction(CONTROLLED_EV_POWER_PU)
+                    for evse in env.evse_list if evse.controlled
+                })
+            _, _, _, _, info = env.step(action)
             violated_steps += not info["diagnostics"]["within_limits"]
         blocks.append(env.get_episode_results())
         if len(blocks) % 30 == 0 or offset + count == total_steps:

@@ -1,0 +1,48 @@
+{
+  "bess": [],
+  "pv": [],
+  "evse": [
+    {
+      "id": "e003",
+      "bus": "bus_005",
+      "phases": ["a", "b", "c"],
+      "p_max_kw": 50.0,
+      "control_mode": "controlled"
+    },
+    {
+      "id": "e054",
+      "bus": "bus_004",
+      "phases": ["a", "b", "c"],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e065",
+      "bus": "bus_002",
+      "phases": ["a", "b", "c"],
+      "p_max_kw": 22.0,
+      "control_mode": "controlled"
+    },
+    {
+      "id": "e067",
+      "bus": "bus_003",
+      "phases": ["a", "b", "c"],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e137",
+      "bus": "bus_004",
+      "phases": ["a"],
+      "p_max_kw": 7.0,
+      "control_mode": "controlled"
+    },
+    {
+      "id": "e142",
+      "bus": "bus_005",
+      "phases": ["b"],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    }
+  ]
+}

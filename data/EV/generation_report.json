@@ -1,0 +1,34 @@
+{
+  "timestamps": 70176,
+  "evses": 540,
+  "sessions": 830489,
+  "selection": {
+    "min_train_sessions": 365,
+    "min_train_quality": 0.9,
+    "training_months": 12,
+    "types": "all with known rated power",
+    "order": "2023 activity descending, then source key"
+  },
+  "excluded": {
+    "unresolved_calendar_mapping": 8,
+    "incompatible_capacity": 0,
+    "mapped_overlap_sessions": 0
+  },
+  "connector_types": {
+    "Type 2": 325,
+    "CCS": 176,
+    "CHAdeMO": 39
+  },
+  "sessions_per_evse_day": 2.103888635557582,
+  "sampled_occupancy_pct": 18.228604587829963,
+  "sessions_between_samples": 31788,
+  "infeasible_at_rated_power": 39677,
+  "crosses_calendar_boundary": 38,
+  "arrival_soc_min": 0.05441666666666667,
+  "arrival_soc_max": 0.9999916666666666,
+  "sha256": {
+    "ev_sessions.csv": "626ec2a865a2fd8b37b4aefaca05c0fe5f34b621be57a80b12af6d62be8b6937",
+    "evse_connections.csv": "c9ce2a5409a463c352ad0b268de69f5a1c10d6309dfd18951846643693acbaa2",
+    "evse_config.json": "bad9352723af03b8177b4b1b17651b955664065d859cb207b255e6dc6a49b41e"
+  }
+}

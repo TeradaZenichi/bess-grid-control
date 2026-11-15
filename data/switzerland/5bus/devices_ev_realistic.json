@@ -1,0 +1,235 @@
+{
+  "scenario_note": "Synthetic 24-EVSE placement: 18x7 kW, 4x22 kW and 2x50/51 kW.",
+  "bess": [],
+  "pv": [],
+  "evse": [
+    {
+      "id": "e137",
+      "bus": "bus_002",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e142",
+      "bus": "bus_002",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e144",
+      "bus": "bus_002",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e160",
+      "bus": "bus_003",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e167",
+      "bus": "bus_003",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e172",
+      "bus": "bus_003",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e183",
+      "bus": "bus_003",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e185",
+      "bus": "bus_003",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e197",
+      "bus": "bus_004",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e209",
+      "bus": "bus_004",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e215",
+      "bus": "bus_004",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e216",
+      "bus": "bus_004",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e218",
+      "bus": "bus_004",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e222",
+      "bus": "bus_005",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e227",
+      "bus": "bus_005",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e235",
+      "bus": "bus_005",
+      "phases": [
+        "a"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e236",
+      "bus": "bus_005",
+      "phases": [
+        "b"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e238",
+      "bus": "bus_005",
+      "phases": [
+        "c"
+      ],
+      "p_max_kw": 7.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e054",
+      "bus": "bus_002",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e059",
+      "bus": "bus_003",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e062",
+      "bus": "bus_004",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e065",
+      "bus": "bus_005",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 22.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e001",
+      "bus": "bus_002",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 50.0,
+      "control_mode": "asap"
+    },
+    {
+      "id": "e002",
+      "bus": "bus_002",
+      "phases": [
+        "a",
+        "b",
+        "c"
+      ],
+      "p_max_kw": 50.0,
+      "control_mode": "asap"
+    }
+  ]
+}
