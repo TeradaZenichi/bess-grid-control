@@ -1,34 +1,43 @@
 # Local BESS controllers
 
 Local BESS policies only; EVSEs remain ASAP. Physics and rewards stay in the
-environment submodule. The interface and configurations exist; policies,
-training and the mode selector are planned. The active case still needs a BESS.
+environment submodule. The interface, type selection, abstract controller
+skeletons and configurations exist; policies, training and the mode selector
+are planned. The active case still needs a BESS.
 
 ## Organization
 
 | Type | Role | Configuration | Status |
 |---|---|---|---|
-| `rule_based` | Deterministic local baseline | [config.py](rule_based/config.py) | Planned |
-| `sac` | RL with selectable architectures | [config.py](sac/config.py) | Planned |
+| `rule_based` | Deterministic local baseline | [config.py](rule_based/config.py) | Abstract skeleton; policy planned |
+| `sac` | RL with selectable architectures | [config.py](sac/config.py) | Abstract skeleton; policy planned |
 
 Each type groups its code and configuration. This README is the single
 controller documentation file.
 
 ```text
 controllers/
+    __init__.py
     base.py
+    config.py
+    rule_based/controller.py
     rule_based/config.py
+    sac/controller.py
     sac/config.py
     sac/architectures/mlp/config.py
     sac/architectures/gru/config.py
 ```
 
-Add `controller.py`, `train.py` and `evaluate.py` inside the relevant type when
-implemented; architecture-specific network code belongs under `architectures/`.
+Implement the policy in each type's `controller.py`; add `train.py` and
+`evaluate.py` there when needed. Architecture-specific network code belongs under
+`architectures/`.
 
 ## Configuration
 
 - Edit Python globals in `config.py`; no argument parser.
+- Select `CONTROLLER_TYPE` in [config.py](config.py): `rule_based` or `sac`.
+  This selection is read at package import; restart the process after changing it.
+  Architecture and operating mode remain in the selected type's configuration.
 - `BESS_ID`, `BUS`, `EXTRA_FEATURES`: controlled device and local observation scope.
   Set the device and bus after adding a BESS to the scenario.
 - SAC `ARCHITECTURE`: `mlp` or `gru`, independent of `MODE`.
@@ -51,12 +60,28 @@ for one objective. Each architecture/mode can have separately trained weights.
 
 ## Interface
 
-[base.py](base.py) defines:
+[base.py](base.py) defines `BaseController`, the abstract inference contract.
+The public class in [__init__.py](__init__.py) inherits the selected implementation:
+
+```text
+BaseController -> RuleBasedController -> Controller   (rule_based)
+BaseController -> SACController       -> Controller   (sac)
+```
+
+Callers use the same import for either type:
 
 ```python
+from controllers import Controller
+
+controller = Controller()
 controller.reset()
 command = controller.act(local_observation, objective)
 ```
+
+Both implementations remain abstract until `act()` is implemented, so the
+construction above currently raises `TypeError`. The type selection does not
+implement a dispatch policy. The base `reset()` does nothing; controllers with
+memory must override it. The current `main.py` still uses its placeholder function.
 
 - Input: filtered pre-action `env.observe_controller()` data and current
   directives. No global state or future EV sessions enter the local policy.
