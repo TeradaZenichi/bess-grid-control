@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-EVSE_CONFIG = ROOT / "data" / "EV" / "evse_config.json"
-OUTPUT = ROOT / "data" / "switzerland" / "5bus" / "devices_ev_realistic.json"
+ROOT = Path(__file__).resolve().parents[3]
+EVSE_CONFIG = Path(__file__).with_name("evse_config.json")
+OUTPUT = ROOT / "data" / "switzerland" / "5bus" / "devices.json"
 SLOW_BUSES = ("bus_002",) * 3 + ("bus_003",) * 5 + ("bus_004",) * 5 + ("bus_005",) * 5
 PHASES = ("a", "b", "c")
 
@@ -30,9 +30,17 @@ def select(metadata, predicate, count, used):
 
 def device(item, bus, phases):
     name, values = item
+    power = float(values["rated_power_kw"])
+    power_factor = 0.95 if power <= 7.4 else 0.98 if power <= 22.0 else 0.99
+    apparent_power = power / power_factor
     return {
         "id": name, "bus": bus, "phases": list(phases),
-        "p_max_kw": float(values["rated_power_kw"]), "control_mode": "asap",
+        "p_max_kw": power, "power_factor": power_factor,
+        "s_max_kva": round(apparent_power, 4),
+        "standby_loss_kw": round(0.001 * apparent_power, 4),
+        "loss_linear_kw": round(0.002 * apparent_power, 4),
+        "loss_quadratic_kw": round(0.008 * apparent_power, 4),
+        "control_mode": "asap",
     }
 
 
@@ -46,7 +54,7 @@ def main():
     devices += [device(item, bus, PHASES) for item, bus in zip(ac, ("bus_002", "bus_003", "bus_004", "bus_005"))]
     devices += [device(item, "bus_002", PHASES) for item in dc]
     scenario = {
-        "scenario_note": "Synthetic 24-EVSE placement: 18x7 kW, 4x22 kW and 2x50/51 kW.",
+        "scenario_note": "Realistic synthetic placement: 18x7 kW, 4x22 kW and 2x50 kW EVSEs.",
         "bess": [], "pv": [], "evse": devices,
     }
     OUTPUT.write_text(json.dumps(scenario, indent=2) + "\n", encoding="utf-8")

@@ -1,20 +1,18 @@
 {
   "schema_version": 1,
-  "formulation": "single_phase_socp",
-  "name": "case5",
-  "description": "Feeder radial de distribuicao, 5 barras, 1 BESS e 1 PV",
+  "formulation": "three_phase_ivr",
+  "name": "case5_realistic_ev",
   "files": {
-    "demand": "demand.csv",
+    "demand": "unbalanced_demand.csv",
     "prices": "../prices/standard_prices.csv",
-    "devices": "devices.json"
+    "devices": "devices.json",
+    "ev_sessions": "../../EV/ev_sessions.csv"
   },
-  "base": {
-    "s_base_kva": 1000.0,
-    "v_base_kv": 11.0
-  },
+  "base": {"s_base_kva": 1000.0, "v_base_kv": 11.0},
   "network": {
     "master": "dss/Master.dss",
-    "slack_bus": "bus_001"
+    "slack_bus": "bus_001",
+    "representation": "three_phase"
   },
   "grid": {
     "bus": "bus_001",
@@ -24,11 +22,6 @@
     "q_max_kvar": 2000.0,
     "feed_in_tariff_ratio": 0.2
   },
-  "voltage_limits": {
-    "v_min_pu": 0.95,
-    "v_max_pu": 1.05
-  },
-  "defaults": {
-    "power_factor": 0.95
-  }
+  "voltage_limits": {"v_min_pu": 0.95, "v_max_pu": 1.05},
+  "ev": {"session_information": "target_deadline"}
 }

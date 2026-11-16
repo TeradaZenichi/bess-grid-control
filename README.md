@@ -45,25 +45,20 @@ implementation reference, not a dependency. See the
 [repository analysis](docs/repository-analysis.md) for reusable patterns,
 three-phase adaptation requirements and the simulator contract.
 
-Run the five-bus unbalanced load scenario with:
+Run one day of the realistic five-bus EV scenario with:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
 Configure `EPISODE_STEPS`, `START_STEP`, `SEED` and `OUTPUT` at the top of
-`main.py`. `EPISODE_STEPS=None` runs the complete remaining series; `96` runs
-one day. This scenario contains loads only, with BESS and PV disabled.
-`BLOCK_STEPS=96` splits the execution into independent daily blocks to keep
-simulation history copies small. This is restricted to the loads-only scenario;
-controllers and storage require continuity of their internal state.
-The same environment and loaded data are reused across full blocks. An incomplete
-final block creates one additional environment.
-Results in `results/5bus_unbalanced/` include phase measurements, electrical
-diagnostics, `voltage_statistics.csv`, `voltage_full_series.png` and
-`voltage_worst_day.png`. The latter shows the UTC day containing the lowest
-bus-phase voltage in the executed period. Both plots share a voltage scale
-across buses and retain the original 15-minute samples.
+`main.py`. Its loop contains only environment iteration and the controller call;
+reporting and impact analysis live in `tools/`. Results are written to
+`results/5bus_realistic_ev/`.
+
+Only active inputs remain visible in `data/EV/` and `data/switzerland/`.
+Generators and metadata are grouped in `data/EV/support/`; other datasets and
+historical cases are in `data/old/`. See the [data index](data/README.md).
 
 All experiments will use the existing OpenDSS-based simulation framework.
 
@@ -73,7 +68,7 @@ The controller will interact with the simulator through its supported observatio
 
 Important conventions:
 
-- BESS active power is positive when charging and negative when discharging.
+- BESS and EVSE net active power is positive when charging and negative when discharging.
 - Reactive power is positive for injection.
 - Public controller actions use per-unit values on the configured network base.
 - BESS state of charge is shared across connected phases.
@@ -98,7 +93,14 @@ The optional [opf-teacher](https://github.com/TeradaZenichi/opf-teacher) may sup
 
 ## Controller Design
 
-The proposed BESS controller will expose a reusable interface with four components.
+Local BESS implementations belong in [controllers/](controllers/README.md).
+Each controller type groups its scripts and Python configuration in one
+subdirectory. Neural architectures are variants within each algorithm,
+independent of operating modes. Documentation is centralized in
+`controllers/README.md`. Neural policies and the mode selector are planned;
+EVSEs remain in ASAP mode.
+
+The controller contract has four components.
 
 **Observations:** Local voltage measurements, BESS state of charge, previous operating conditions, available operating limits, and other explicitly permitted measurements.
 
@@ -155,8 +157,7 @@ Proposed safety mechanisms must be implemented, tested, and evaluated explicitly
 
 The following structure is proposed and will evolve as implementation progresses.
 
-- `src/bess_grid_control/` — Controllers, policies, training, and evaluation utilities.
-- `configs/` — Experimental and algorithm configurations.
+- `controllers/` — Local BESS policies, common interface and per-controller documentation.
 - `experiments/` — Research experiments and ablation studies.
 - `tests/` — Unit, integration, and physical-consistency tests.
 - `results/` — Generated outputs, excluded from version control when appropriate.

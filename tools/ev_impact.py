@@ -13,30 +13,15 @@ from matplotlib.patches import Patch
 from opendss_environment import EnvironmentConfig, MicrogridEnv
 
 
-ROOT = Path(__file__).resolve().parent
-LOADS_CASE = ROOT / "data" / "switzerland" / "5bus" / "config_unbalanced.json"
+ROOT = Path(__file__).resolve().parents[1]
+LOADS_CASE = ROOT / "data" / "old" / "switzerland" / "5bus" / "config_loads_only.json"
 DEMAND = ROOT / "data" / "switzerland" / "5bus" / "unbalanced_demand.csv"
 SESSIONS = ROOT / "data" / "EV" / "ev_sessions.csv"
-SCENARIO = "realistic"
-SCENARIOS = {
-    "realistic": {
-        "case": "config_unbalanced_ev_realistic.json",
-        "devices": "devices_ev_realistic.json",
-        "output": "ev_realistic_impact",
-        "label": "24 diversified ASAP EVSEs",
-    },
-    "all": {
-        "case": "config_unbalanced_ev_all_asap.json",
-        "devices": "devices_ev_all_asap.json",
-        "output": "ev_all_asap_impact",
-        "label": "540 ASAP EVSEs",
-    },
-}
-SETTINGS = SCENARIOS[SCENARIO]
 CASE_ROOT = ROOT / "data" / "switzerland" / "5bus"
-EV_CASE = CASE_ROOT / SETTINGS["case"]
-EV_DEVICES = CASE_ROOT / SETTINGS["devices"]
-OUTPUT = ROOT / "results" / SETTINGS["output"]
+EV_CASE = CASE_ROOT / "config.json"
+EV_DEVICES = CASE_ROOT / "devices.json"
+EV_LABEL = "24 diversified ASAP EVSEs"
+OUTPUT = ROOT / "results" / "ev_realistic_impact"
 EPISODE_STEPS = 96
 STEP_NS = 15 * 60 * 1_000_000_000
 
@@ -109,6 +94,7 @@ def run_case(case, start_step):
     grid_import = np.maximum(-np.asarray(env.grid.array_kw), 0.0)
     evse = env.evse_list
     ev_power = sum((np.asarray(device.array_kw) for device in evse), np.zeros(EPISODE_STEPS))
+    ev_reactive = sum((np.asarray(device.array_kvar) for device in evse), np.zeros(EPISODE_STEPS))
     ev_peak_step = int(ev_power.argmax())
     metrics = {
         "minimum_voltage_pu": worst[0],
@@ -117,6 +103,7 @@ def run_case(case, start_step):
         "minimum_voltage_timestamp": env.timestamps.iloc[worst[3]].isoformat(),
         "maximum_grid_import_kw": float(grid_import.max()),
         "maximum_ev_load_kw": float(ev_power[ev_peak_step]),
+        "maximum_ev_reactive_kvar": float(np.abs(ev_reactive).max()),
         "maximum_ev_load_timestamp": env.timestamps.iloc[ev_peak_step].isoformat(),
         "grid_import_kwh": float(grid_import.sum() * env.dt),
         "energy_cost": float(sum(env.results.costs)),
@@ -126,6 +113,7 @@ def run_case(case, start_step):
         "grid_limit_events": sum(item["grid_excess_pu"] for item in env.results.diagnostics),
         "ev_delivered_kwh": float(sum(device.delivered_kwh for device in evse)),
         "ev_unmet_kwh": float(sum(device.unmet_kwh for device in evse)),
+        "ev_conversion_loss_kwh": float(sum(device.conversion_loss_kwh for device in evse)),
         "runtime_seconds": perf_counter() - started,
     }
     traces = {
@@ -134,6 +122,7 @@ def run_case(case, start_step):
         "voltages": voltages,
         "grid_import_kw": grid_import,
         "ev_load_kw": ev_power,
+        "ev_reactive_kvar": ev_reactive,
         "branch_kw": {
             element: np.asarray([step.get(element, 0.0) for step in branch_history])
             for element in sorted({name for step in branch_history for name in step})
@@ -145,7 +134,7 @@ def run_case(case, start_step):
 def save_plots(loads, ev):
     timestamps = ev["timestamps"]
     worst_bus = min(ev["voltages"], key=lambda item: ev["voltages"][item].min())[0]
-    label = SETTINGS["label"]
+    label = EV_LABEL
     fig, axes = plt.subplots(2, 1, figsize=(13, 8), sharex=True)
     axes[0].plot(timestamps, loads["minimum_voltage_pu"], label="Loads only", linewidth=1.5)
     axes[0].plot(timestamps, ev["minimum_voltage_pu"], label=label, linewidth=1.5)
@@ -172,6 +161,7 @@ def save_plots(loads, ev):
     axes[0].plot(timestamps, loads["grid_import_kw"], label="Grid import - loads only")
     axes[0].plot(timestamps, ev["grid_import_kw"], label=f"Grid import - {label}")
     axes[0].plot(timestamps, ev["ev_load_kw"], label="Aggregate EV load", linestyle="--")
+    axes[0].plot(timestamps, ev["ev_reactive_kvar"], label="Aggregate EV reactive", linestyle=":")
     peak_power = max(ev["grid_import_kw"].max(), ev["ev_load_kw"].max())
     if 2000.0 <= 1.5 * peak_power:
         axes[0].axhline(2000.0, color="tab:red", linestyle=":", label="Grid limit 2000 kW")
@@ -213,6 +203,7 @@ def save_plots(loads, ev):
         "loads_only_grid_import_kw": loads["grid_import_kw"],
         "all_evse_grid_import_kw": ev["grid_import_kw"],
         "all_evse_load_kw": ev["ev_load_kw"],
+        "all_evse_reactive_kvar": ev["ev_reactive_kvar"],
     }
     power_data.update({f"{name}_kw": values for name, values in ev["branch_kw"].items()})
     pd.DataFrame(power_data).to_csv(OUTPUT / "power_flow_timeseries.csv", index=False)
@@ -244,10 +235,10 @@ def save_plots(loads, ev):
         box.set_alpha(0.65)
     axis.set_xticks(positions, buses)
     axis.set_ylabel("Phase voltage [pu]")
-    axis.set_title(f"Voltage distribution on the worst day - {SETTINGS['label']}")
+    axis.set_title(f"Voltage distribution on the worst day - {EV_LABEL}")
     axis.legend(handles=[
         Patch(facecolor="tab:blue", alpha=0.65, label="Loads only"),
-        Patch(facecolor="tab:orange", alpha=0.65, label=SETTINGS["label"]),
+        Patch(facecolor="tab:orange", alpha=0.65, label=EV_LABEL),
     ])
     axis.grid(axis="y", alpha=0.25)
     fig.tight_layout()
@@ -277,7 +268,7 @@ def main():
     ev_metrics, ev_traces = run_case(EV_CASE, start_step)
     save_plots(loads_traces, ev_traces)
     comparison = {
-        "scenario": SCENARIO,
+        "scenario": "realistic",
         "evse_count": len(devices),
         "installed_power_kw": sum(device["p_max_kw"] for device in devices),
         "start_step": start_step,

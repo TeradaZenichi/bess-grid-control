@@ -8,9 +8,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[2]
-OUTPUT = Path(__file__).resolve().parent
-SOURCE = ROOT / "gridcharge-data/data/processed"
+ROOT = Path(__file__).resolve().parents[3]
+SUPPORT = Path(__file__).resolve().parent
+OUTPUT = SUPPORT.parent
+GRIDCHARGE = ROOT / "data/old/gridcharge-data"
+SOURCE = GRIDCHARGE / "data/processed"
 DEMAND = ROOT / "data/switzerland/5bus/unbalanced_demand.csv"
 MIN_TRAIN_SESSIONS = 365
 MIN_TRAIN_QUALITY = 0.90
@@ -29,9 +31,9 @@ SHORT_COLUMNS = {
 
 
 def select_events():
-    continuity = ROOT / "gridcharge-data/data/reports/connector_continuity.csv"
+    continuity = GRIDCHARGE / "data/reports/connector_continuity.csv"
     if not continuity.exists():
-        subprocess.run([sys.executable, str(ROOT / "gridcharge-data/pipeline.py")], check=True)
+        subprocess.run([sys.executable, str(GRIDCHARGE / "pipeline.py")], check=True)
     selected = pd.read_csv(continuity, dtype={"charger_id": str, "connector_id": str})
     selected["train_n"] = selected[[f"2023-{m:02d}" for m in range(1, 13)]].sum(axis=1)
     selected = selected.loc[selected.months_2023.eq(12) & selected.rated_metadata
@@ -57,7 +59,7 @@ def select_events():
     excluded["reason"] = np.where(bad_time.loc[excluded.index], "calendar_mapping", "battery_capacity")
     events = events.loc[~(bad_time | bad_capacity)].copy()
     # Check overlaps again after the synthetic local-clock mapping.
-    sys.path.insert(0, str(ROOT / "gridcharge-data"))
+    sys.path.insert(0, str(GRIDCHARGE))
     from src.validation import overlap_flags
     mapped = events[["connector_key"]].copy()
     mapped["start_time_utc"] = events.scenario_arrival_utc
@@ -66,7 +68,7 @@ def select_events():
     rejected["mapped_overlap_sessions"] = int(overlaps.sum())
     extra = events.loc[overlaps, ["session_id", "connector_key"]].copy()
     extra["reason"] = "mapped_overlap"
-    pd.concat([excluded, extra]).to_csv(OUTPUT / "excluded_sessions.csv", index=False)
+    pd.concat([excluded, extra]).to_csv(SUPPORT / "excluded_sessions.csv", index=False)
     return selected, events.loc[~overlaps].copy(), rejected
 
 
@@ -131,7 +133,7 @@ def main():
     for label in ("train", "test"):
         activity[f"n_{label}"] = sessions.loc[sessions.split.eq(label)].groupby("evse_id").size().reindex(activity.index, fill_value=0)
     activity["occ_pct"] = 100 * matrix.iloc[:, 1:].ne(0).mean()
-    activity.to_csv(OUTPUT / "evse_activity.csv", index_label="evse")
+    activity.to_csv(SUPPORT / "evse_activity.csv", index_label="evse")
     config = {
         "schema_version": 2, "units": {"soc": "fraction", "energy": "kWh", "power": "kW"},
         "session_columns": {short: long for long, short in SHORT_COLUMNS.items()},
@@ -147,7 +149,7 @@ def main():
             "rated_power_kw": row.rated_power_kw, "train_n": row.train_n,
             "train_quality": row.training_quality_fraction, "bus": None, "phases": None} for row in selected.itertuples()},
     }
-    (OUTPUT / "evse_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
+    (SUPPORT / "evse_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")
     report = {"timestamps": len(matrix), "evses": len(selected), "sessions": len(sessions),
         "selection": config["selection"], "excluded": rejected,
         "connector_types": selected.connector_type.value_counts().to_dict(),
@@ -157,10 +159,10 @@ def main():
         "infeasible_at_rated_power": int((~sessions.feasible_at_rated_power).sum()),
         "crosses_calendar_boundary": int(sessions.crosses_calendar_boundary.sum()),
         "arrival_soc_min": float(sessions.arrival_soc.min()), "arrival_soc_max": float(sessions.arrival_soc.max()),
-        "sha256": {name: hashlib.sha256((OUTPUT / name).read_bytes()).hexdigest() for name in
-                   ("ev_sessions.csv", "evse_connections.csv", "evse_config.json")},
+        "sha256": {path.relative_to(OUTPUT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in (OUTPUT / "ev_sessions.csv", OUTPUT / "evse_connections.csv", SUPPORT / "evse_config.json")},
     }
-    (OUTPUT / "generation_report.json").write_text(json.dumps(report, indent=2))
+    (SUPPORT / "generation_report.json").write_text(json.dumps(report, indent=2))
     print(json.dumps(report, indent=2))
 
 

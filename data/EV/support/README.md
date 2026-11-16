@@ -1,27 +1,31 @@
 # EV charging scenario
 
+`../ev_sessions.csv` and `../evse_connections.csv` are kept together as the
+session table and its companion connection matrix. This support directory
+groups the less frequently used generators, metadata and reports.
+
 Run from the repository root, using the project environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pip install -r gridcharge-data/requirements.txt
-.\.venv\Scripts\python.exe data/EV/download_gridcharge.py
-.\.venv\Scripts\python.exe data/EV/create_ev_csv.py
+.\.venv\Scripts\python.exe -m pip install -r data/old/gridcharge-data/requirements.txt
+.\.venv\Scripts\python.exe data/EV/support/download_gridcharge.py
+.\.venv\Scripts\python.exe data/EV/support/create_ev_csv.py
 ```
 
 `download_gridcharge.py` contains the downloader used for this extraction. It
-preserves originals and checks hashes in `gridcharge-data/data/raw/`. The pinned
+preserves originals and checks hashes in `data/old/gridcharge-data/data/raw/`. The pinned
 GridCharge revision contains 23 months; September 2024 comes from the official
 ChargePlace Scotland XLSX, with separate provenance. `create_ev_csv.py` uses the
-audited Parquets; if they are absent, it first executes `gridcharge-data/pipeline.py`.
+audited Parquets; if they are absent, it first executes `data/old/gridcharge-data/pipeline.py`.
 The pipeline source and dependency list must accompany these scripts.
 
 ## CSVs
 
-- `evse_connections.csv`: exactly the timestamp strings and row order of
-  `../switzerland/5bus/unbalanced_demand.csv`; each EVSE column contains `0` or
+- `../evse_connections.csv`: exactly the timestamp strings and row order of
+  `../../switzerland/5bus/unbalanced_demand.csv`; each EVSE column contains `0` or
   the integer session ID connected **at the start** of that interval. Columns use short
   names `e001`, `e002`, etc., ranked by 2023 activity; the JSON maps each to its source.
-- `ev_sessions.csv`: session lookup with short column names (legend below).
+- `../ev_sessions.csv`: session lookup with short column names (legend below).
   `arr <= timestamp < dep` defines connection. Times are UTC.
 
 The selection uses 2023 activity/quality only: all 12 training months, >=365
@@ -82,18 +86,28 @@ until a physical placement is explicitly chosen. Do not interpret final energy,
 departure or modeled SoC as measured causal arrival data. Whether the controller
 receives the assumed target/deadline must be specified in the experiment.
 
-`generation_report.json` records counts, flags and hashes of the generated files.
+`generation_report.json` records counts, flags and hashes of the generated files;
+its hash paths are relative to `data/EV/`.
 
 ## OpenDSS environment
 
-`../switzerland/5bus/config_unbalanced_ev.json` is a small integration scenario
-with six EVSEs. Three use external `controlled` commands and three use `asap`.
-Their feeder buses and phases are explicit synthetic scenario choices; they do
-not come from GridCharge.
-In the repository `main.py`, set `USE_EV = True` to run one day. Keep
-`CONTROLLED_EV_POWER_PU = None` to leave controlled EVSEs idle, or set a
-nonnegative per-unit charging command such as `0.022`.
+`../../switzerland/5bus/config.json` is the EV integration
+scenario. It places 24 diversified ASAP EVSEs across the feeder: 18 slow AC,
+four 22 kW AC and two fast DC chargers. Their feeder buses and phases are
+explicit synthetic choices; they do not come from GridCharge. `main.py` runs one
+day of this scenario.
 
 The environment reads this session table directly. It processes exact events
 inside each 15-minute interval and sends the energy-equivalent average load to
 OpenDSS; `evse_connections.csv` remains an inspection artifact.
+
+Controlled EVSEs may optionally enable V2G. Their signed net power follows the
+same convention as BESS: positive charging and negative discharging. Discharge
+is bounded by charger power, session power, configured minimum SoC and stored
+energy; ASAP chargers remain unidirectional.
+
+Each active ASAP EVSE declares a fixed `power_factor`. Controlled V2G chargers
+receive independent P/Q commands and enforce their `s_max_kva` capability
+circle. Their internal loss curve combines standby, linear-current and
+quadratic-current terms; these losses reduce SoC and increase the energy still
+required at departure.

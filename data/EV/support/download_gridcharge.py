@@ -9,6 +9,7 @@ from urllib.parse import quote
 
 import requests
 
+DESTINATION = Path(__file__).resolve().parents[2] / "old/gridcharge-data"
 REPO = "djordjebatic/GridCharge"
 REVISION = "fd70bf347d6cf8596b7e45d9658cb6d3fd55b7a0"
 MONTHS = "january february march april may june july august september october november december".split()
@@ -90,4 +91,4 @@ def download_all(root):
 
 
 if __name__ == "__main__":
-    download_all(Path(__file__).resolve().parents[2] / "gridcharge-data")
+    download_all(DESTINATION)

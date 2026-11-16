@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-EVSE_CONFIG = ROOT / "data" / "EV" / "evse_config.json"
-OUTPUT = ROOT / "data" / "switzerland" / "5bus" / "devices_ev_all_asap.json"
+ROOT = Path(__file__).resolve().parents[3]
+EVSE_CONFIG = ROOT / "data" / "EV" / "support" / "evse_config.json"
+OUTPUT = ROOT / "data" / "old" / "switzerland" / "5bus" / "devices_ev_all_asap.json"
 BUSES = ("bus_002", "bus_003", "bus_004", "bus_005")
 PHASES = ("a", "b", "c")
 SINGLE_PHASE_MAX_KW = 7.4

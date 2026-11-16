@@ -29,6 +29,6 @@
   "sha256": {
     "ev_sessions.csv": "626ec2a865a2fd8b37b4aefaca05c0fe5f34b621be57a80b12af6d62be8b6937",
     "evse_connections.csv": "c9ce2a5409a463c352ad0b268de69f5a1c10d6309dfd18951846643693acbaa2",
-    "evse_config.json": "bad9352723af03b8177b4b1b17651b955664065d859cb207b255e6dc6a49b41e"
+    "support/evse_config.json": "bad9352723af03b8177b4b1b17651b955664065d859cb207b255e6dc6a49b41e"
   }
 }
