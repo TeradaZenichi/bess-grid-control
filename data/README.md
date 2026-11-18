@@ -24,6 +24,10 @@ price references for neural controllers. Shared scaling also reads meter ratings
 from OpenDSS and inverter ratings from device parameters; it does not change
 the environment's physical observations. See [controller inputs](../controllers/README.md#sac-local-observations).
 
+`training_split` reserves days 15-21 of every local month in 2023 for SAC
+validation. Training episode windows exclude those dates and all of 2024.
+The annual baseline evaluator still reports 2023 as one `train_eval` group.
+
 The active BESS is `b1` at `bus_004_lv`: 100 kWh, 40 kW charge/discharge and a
 50 kVA inverter, with independent phase dispatch. Initial SoC is 50%, with
 physical limits of 10-100%; charge/discharge efficiencies are both 95%.

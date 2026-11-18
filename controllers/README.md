@@ -21,11 +21,11 @@ controllers/
     __init__.py
     base.py
     config.json
-    config.py  # shared JSON loader
     normalization.py
     rule_based/controller.py
     rule_based/config.json
     sac/controller.py
+    sac/__init__.py  # SAC Config: common, algorithm and architecture values
     sac/config.json
     sac/observation.py
     sac/networks.py
@@ -46,12 +46,12 @@ Each architecture package defines its class in `__init__.py`. The common
 
 ```python
 from pathlib import Path
-from controllers.config import load_config
+from controllers.base import Config
 from controllers.sac.architectures import MLP, GRU
 
 folder = Path("controllers/sac/architectures")
-mlp_config = load_config(folder / "mlp/config.json")
-gru_config = load_config(folder / "gru/config.json")
+mlp_config = Config(folder / "mlp/config.json")
+gru_config = Config(folder / "gru/config.json")
 mlp = MLP(input_size=264, output_size=6, config=mlp_config)
 gru = GRU(input_size=32, output_size=6, config=gru_config)
 ```
@@ -63,17 +63,31 @@ architectures in the SAC actor and critics described below.
 
 ## Configuration
 
-- Edit the JSON values; no argument parser. `load_config()` returns a
-  `SimpleNamespace`, accessed as `config.mode` or `config.hidden_sizes`.
+- Edit the JSON values; no argument parser. `Config` in `base.py` reads JSON
+  values into a `SimpleNamespace`, accessed as `config.mode` or `config.hidden_sizes`.
+  `Config.controller("sac")` merges common values with the SAC-specific settings;
+  explicit per-run overrides take precedence and do not change the defaults.
 - Select `controller_type` in [config.json](config.json): `rule_based` or `sac`.
   This selection is read at package import; restart the process after changing it.
-  Architecture and operating mode remain in the selected type's configuration.
+  Shared values also live here: `architecture`, `mode`, `bess_id`, `bus`,
+  `extra_features`, `observation_timezone`, `seed`, `case_path` and `reward_term`.
+  `Config` resolves `case_path` against the repository root on loading; the JSON
+  keeps a relative path, while the object stores an absolute string for JSON metadata.
 - `bess_id`, `bus`, `extra_features`: controlled device and local observation scope.
   Set the device and bus after adding a BESS to the scenario.
 - SAC `architecture`: `mlp` or `gru`, independent of `mode`.
 - [MLP settings](sac/architectures/mlp/config.json): layer sizes and history length.
 - [GRU settings](sac/architectures/gru/config.json): hidden size and history length.
-- SAC learning rate, discount, batch size and seed stay in `sac/config.json`.
+- SAC learning rate, discount, batch/replay sizes and episode length stay in
+  `sac/config.json`. Rule thresholds stay in `rule_based/config.json`.
+
+Training output is derived from the effective settings, for example:
+`results/controllers/switzerland_5bus/sac/economic/node_cost/mlp/trial_003/seed_42/`.
+Call `trainer.hpo(trial="trial_003")` to name a trial; by default its ID contains
+the UTC time. Different rewards, architectures, trials and seeds have separate
+folders. An existing training folder is not overwritten. Rule-based runs omit
+the architecture level. `main.py` uses the same layout with `simulation` as the
+run ID, unless its `OUTPUT` global is set explicitly.
 
 Network/learning values are initial proposals, not tuned settings. Both input
 encoders use eight measured steps. GRU sequence replay and recurrent policy
@@ -118,7 +132,8 @@ starts with random weights and is not a trained control policy.
 Settings use lowercase names. `vars(controller.config)` provides a dictionary
 for saving experiment metadata. SAC also accepts `architecture_settings`, such
 as `{"hidden_sizes": [128, 64], "history_steps": 16}`; the resulting object is
-available as `controller.architecture_config` and is passed to the network.
+merged into `controller.config`, which is passed to the network.
+`controller.architecture_config` remains an alias for the same object.
 
 `main.py` creates a local policy for each configured BESS and follows available
 PV generation without optimization. With no BESS it retains the original ASAP
@@ -232,13 +247,23 @@ executed previous P/Q. Entropy/log-probabilities use normalized action coordinat
 an architecture factory. Run `python train.py` through
 the [root entry point](../train.py), which also supports VS Code's Run/Debug Python
 File commands. Breakpoints can be placed in either file. The module command
-`python -m controllers.sac.train` also works. This scaffold currently creates no
-environment, collects no transitions and writes no artifacts.
+`python -m controllers.sac.train` also works. It prints a monthly episode plan,
+initializes its first environment/observation/actor/critics and closes that
+environment. It collects no transitions and updates no weights. It saves
+`initialization.json` with the effective settings, architecture settings and
+episode/validation plan in the derived output folder.
 
-`train(settings=None, architecture_settings=None)` accepts algorithm overrides
-and architecture overrides separately, without changing the base configuration.
-It returns `{"status": "not_trained", "score": None, "settings": {...},
-"architecture_settings": {...}}`. After implementation, `score` will be a float:
+`SACTrainer(config=None)` accepts a SAC `Config` instance or creates one from the
+JSON defaults. It merges controller, SAC and architecture values in `self.config`.
+`train(*, trial=None)` uses that object directly. Change its attributes before
+calling training; no per-trial config copies or JSON reloads occur in `train()`.
+`config.network` selects the architecture class and `config.flatten` follows it.
+Assigning a different `config.architecture` loads its defaults; assign tuned
+history/layer values after selecting the architecture.
+It returns `{"status": "episodes_ready", "score": None, "episodes": [...],
+"validation": [...], "settings": {...}, "flatten": true}`, together
+with the first timestamp and input/action dimensions. `trainer.initial_state`
+contains the encoded first observation for debugging. After implementation, `score` will be a float:
 mean validation reward to maximize, not training return. No score is fabricated
 while the training loop remains a comment. Each run must create fresh
 networks, targets, replay and optimizers, train for its allocated budget,
@@ -247,24 +272,55 @@ The requested normalized action belongs in replay; executed P/Q remains in
 the next observation. Episode boundaries must handle termination/truncation
 and clear the observation history correctly.
 
-`hpo(settings=None, architecture_settings=None)` currently forwards the overrides
-to `train()` and returns that result. The root entry point stores it as `result`
-for inspection in the debugger. Later, `hpo()` will suggest both sets of settings, call `train()`
+`hpo(*, trial=None)` currently calls `train()` and returns that result.
+The root entry point stores it as `result` for inspection in the debugger.
+Later, its objective will assign suggestions directly to `self.config`, call `train()`
 for each trial/seed with comparable budgets, and select the best validation
 score. Test periods/seeds remain separate. There is no HPO library or search
-algorithm configured yet. Scenario, episode, reward and replay settings remain
-reserved in `sac/config.json`; the default economic term is `node_cost`.
+algorithm configured yet. Shared scenario/seed values and the SAC episode length
+control initialization; reward/replay/optimizer settings remain reserved. The
+default economic term is `node_cost`.
 Switch to `feeder_cost` for the other experiment, preserving actor observations.
+
+The scenario's `training_split` defines year 2023, Europe/Zurich time, and days
+15-21 of each month for validation (`validation_end_day=22` is exclusive).
+[episodes.py](episodes.py) samples one eligible local-midnight start per month,
+shuffles the month order and uses the trial seed. Every training timestamp in
+each window must belong to 2023 and fall outside those validation days.
+Consecutive allowed days can span a month boundary. All twelve months are
+represented in each planned cycle; later training will repeat and resample cycles.
+
+`episode_steps=672` means 168 elapsed hours at 15-minute resolution.
+`num_training_episodes=12` is the initial total training episode budget, editable
+through `trainer.config.num_training_episodes`. The collection loop is still pending.
+With that default, the budget covers one cycle of twelve monthly windows.
+
+Near DST,
+the local end hour can differ from midnight; the plan records the exact end.
+This duration is separate from the network's eight-step observation history.
+`EnvironmentConfig(start_step=i, episode_steps=n)` selects `[i, i+n)`.
+The environment now also supports `env.reset(options={"start_step": i,
+"episode_steps": n})`, with absolute indices and overrides for that reset only.
+Reuse the training environment for subsequent windows and reset the observation
+encoder separately. Validation should use another environment and encoder;
+actor/critics/replay stay with training, and validation transitions never enter
+replay. The annual evaluator already creates its own environments. The SAC
+training loop and periodic validation execution remain pending. `train()` currently
+opens only the first planned window, resets the BESS to its configured initial
+SoC and initializes a one-sample history with padding/mask. Window cutoffs and
+SAC bootstrap handling must be implemented before collecting training updates.
 
 ## Evaluation by year
 
 Run `python test.py` from the root, or use VS Code's Run/Debug Python File command
-on that entry point. [evaluation.json](evaluation.json) selects the scenario,
-controller overrides, seed, timezone and year groups: **2023 is `train_eval` and
-2024 is `test`**. These are inference runs on both groups, not weight updates;
-no separate validation subset inside 2023 has been defined yet.
+on that entry point. [evaluation.json](evaluation.json) selects controller overrides,
+the output root and year groups: **2023 is `train_eval` and
+2024 is `test`**. These are whole-year inference runs, not weight updates.
+The SAC monthly training/validation split is separate; the annual evaluator
+still combines all of 2023 under `train_eval`.
 The controller type follows `controllers/config.json`; the default remains
-rule-based economic control. SAC currently has no trained checkpoint loader,
+rule-based economic control. Scenario, seed and observation timezone come from
+the shared controller config. SAC currently has no trained checkpoint loader,
 so selecting it evaluates random initial weights and labels the report `untrained`.
 
 [evaluate_controller.py](../tools/evaluate_controller.py) selects years in
@@ -276,7 +332,8 @@ carrying device or controller state from the training/evaluation period into tes
 The 2024 PV profile is a synthetic repetition of the 2023 shape, as documented
 in [data/README.md](../data/README.md).
 
-Results go to `results/evaluations/<controller_type>/<UTC-run>/<group>/<year>/`:
+Results use the same derived hierarchy under `results/evaluations/`, with
+`evaluation_<UTC-run>` as the trial ID and `<group>/<year>/` after the seed:
 
 - `summary.json` and `evaluation.json`: energy, costs, voltage metrics, SoC,
   exact intervals, effective settings, device parameters and scaling references.
@@ -297,17 +354,16 @@ and action contract (the following are the current eight-step/per-phase sizes):
 
 ```python
 trainer = SACTrainer()
-actor, critics = trainer.architecture(264, 6, settings={"architecture": "mlp"},
-                                     architecture_settings={"hidden_sizes": [64, 64]})
-actor, critics = trainer.architecture(32, 6, settings={"architecture": "gru"},
-                                     architecture_settings={"hidden_size": 64})
-result = trainer.hpo(settings={"learning_rate": 0.0001},
-                     architecture_settings={"hidden_sizes": [128, 64]})
+trainer.config.architecture = "mlp"
+trainer.config.hidden_sizes = [128, 64]
+trainer.config.learning_rate = 0.0001
+actor, critics = trainer.architecture(264, 6)
+result = trainer.hpo(trial="trial_003")
 # After real training: the HPO trial objective is result["score"].
 ```
 
 The factory selects MLP/GRU through `ARCHITECTURES`, creates an independent actor,
-Q1 and Q2, and returns them. Critics are available as `critics["q1"]`/`critics["q2"]`
+Q1 and Q2, and returns them. Critics are available as `critics.q1`/`critics.q2`
 or `trainer.critic.q1`/`trainer.critic.q2`. Calling it again replaces the trainer's
 network references with fresh modules; no weights or replay are reused across trials.
 

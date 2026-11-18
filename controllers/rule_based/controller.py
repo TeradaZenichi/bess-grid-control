@@ -4,15 +4,13 @@ from cmath import rect
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
-from pathlib import Path
 import math
 
 from opendss_environment import PhaseAction, TotalAction
 from opendss_environment.elements import BESS, BESSConfig
 from opendss_environment.network import device_phases
 
-from ..base import BaseController
-from ..config import load_config
+from ..base import BaseController, Config
 
 
 def _finite(value):
@@ -31,7 +29,7 @@ class RuleBasedController(BaseController):
     def __init__(self, bess, settings=None, *, scaling=None):
         self.parameters = BESSConfig(**deepcopy(bess))
         self.scaling = scaling
-        self.config = load_config(Path(__file__).with_name("config.json"), settings)
+        self.config = Config.controller("rule_based", settings)
         self.id, self.bus = self.parameters.id, self.parameters.bus
         for name, expected in (("bess_id", self.id), ("bus", self.bus)):
             if getattr(self.config, name) not in (None, expected):

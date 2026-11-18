@@ -1,3 +1,12 @@
 {
-  "controller_type": "rule_based"
+  "controller_type": "rule_based",
+  "architecture": "mlp",
+  "mode": "economic",
+  "bess_id": null,
+  "bus": null,
+  "extra_features": ["grid", "branches"],
+  "observation_timezone": "Europe/Zurich",
+  "seed": 42,
+  "case_path": "data/switzerland/5bus/config.json",
+  "reward_term": "node_cost"
 }

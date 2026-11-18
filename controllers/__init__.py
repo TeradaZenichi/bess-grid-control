@@ -1,9 +1,7 @@
 """Public BESS controller, inheriting only the configured implementation."""
-from pathlib import Path
+from .base import Config
 
-from .config import load_config
-
-CONTROLLER_TYPE = load_config(Path(__file__).with_name("config.json")).controller_type
+CONTROLLER_TYPE = Config.controller().controller_type
 
 if CONTROLLER_TYPE == "rule_based":
     from .rule_based.controller import RuleBasedController as _SelectedController

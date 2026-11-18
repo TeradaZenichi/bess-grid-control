@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from controllers import Controller
-from controllers.config import load_config
+from controllers.base import Config
 from controllers import CONTROLLER_TYPE
 from opendss_environment import Action, EnvironmentConfig, MicrogridEnv, PhaseAction, TotalAction
 from opendss_environment.results_scripts.summary import save_summary
@@ -150,7 +150,7 @@ def manifest():
         "local_timezone": LOCAL_TIMEZONE, "input_sha256": hashes, "git": git,
         "python": platform.python_version(),
         "packages": {name: version(name) for name in ("numpy", "pandas", "gymnasium", "OpenDSSDirect.py", "pu-normalizer")},
-        "rule_settings": vars(load_config(ROOT / "controllers/rule_based/config.json")),
+        "rule_settings": vars(Config.controller("rule_based")),
         "notes": ["EVSEs are ASAP and PV follows the available profile at fixed power factor in every mode.",
                   "Each run resets once; SoC remains continuous for the complete episode.",
                   "No terminal SoC equality is imposed. Compare initial/final SoC along with energy cost.",

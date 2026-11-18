@@ -6,14 +6,14 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from controllers.config import load_config
+from controllers.base import Config
 from controllers.rule_based.controller import RuleBasedController
 from tools.evaluate_controller import CONFIG, evaluate, year_windows
 
 
 class ControllerEvaluationTest(unittest.TestCase):
     def test_local_year_windows_include_leap_year_and_have_no_overlap(self):
-        config = load_config(CONFIG)
+        config = Config(CONFIG, vars(Config.controller()))
         self.assertEqual(year_windows(config), [
             ("train_eval", 2023, 0, 35040, 35040),
             ("test", 2024, 35040, 35136, 35136),
@@ -24,7 +24,7 @@ class ControllerEvaluationTest(unittest.TestCase):
     def test_evaluation_calls_controller_and_saves_separate_period_results(self):
         with TemporaryDirectory() as directory:
             with patch.object(RuleBasedController, "act", autospec=True, side_effect=RuleBasedController.act) as act:
-                frame = evaluate({"output_path": directory, "step_limit": 4})
+                frame = evaluate({"output_root": directory, "step_limit": 4})
                 self.assertEqual(act.call_count, 8)
             self.assertEqual(frame.group.tolist(), ["train_eval", "test"])
             self.assertEqual(frame.steps.tolist(), [4, 4])

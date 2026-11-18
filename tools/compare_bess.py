@@ -12,7 +12,7 @@ import pandas as pd
 
 import main as runner
 from controllers import CONTROLLER_TYPE
-from controllers.config import load_config
+from controllers.base import Config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,7 +163,7 @@ def main():
     manifest = {
         "case": str(CASE.relative_to(ROOT)), "start_step": START_STEP,
         "episode_steps": EPISODE_STEPS, "seed": SEED, "bess": BESS,
-        "rule_settings": vars(load_config(ROOT / "controllers/rule_based/config.json", {"mode": MODE})),
+        "rule_settings": vars(Config.controller("rule_based", {"mode": MODE})),
         "metrics": metrics,
         "notes": ["Identical exogenous loads, prices and ASAP EV profiles in both runs.",
                   "No terminal SoC equality is imposed. Raw cost includes use of initial battery inventory.",

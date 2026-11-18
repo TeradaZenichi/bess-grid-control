@@ -1,9 +1,4 @@
 {
-  "mode": "economic",
-  "bess_id": null,
-  "bus": null,
-  "extra_features": ["grid", "branches"],
-  "seed": 42,
   "price_low": 0.17,
   "price_high": 0.23,
   "adaptive_prices": true,

@@ -2,17 +2,19 @@
 from pathlib import Path
 
 from controllers import Controller
+from controllers.base import Config
 from controllers.normalization import ObservationScaling
 from opendss_environment import Action, EnvironmentConfig, MicrogridEnv, PhaseAction, TotalAction
 from tools.reporting import save_results
 
 
 ROOT = Path(__file__).resolve().parent
-CASE = ROOT / "data" / "switzerland" / "5bus" / "config.json"
-OUTPUT = ROOT / "results" / "5bus_realistic_ev_pv"
+CONFIG = Config.controller()
+CASE = ROOT / CONFIG.case_path
+OUTPUT = None
 EPISODE_STEPS = 96
 START_STEP = 0
-SEED = 42
+SEED = CONFIG.seed
 
 
 def main(controller_settings=None):
@@ -39,7 +41,7 @@ def main(controller_settings=None):
             break
 
     results = env.get_episode_results()
-    save_results(results, OUTPUT)
+    save_results(results, OUTPUT or Config.controller(settings=controller_settings).output_path("simulation"))
     return results
 
 

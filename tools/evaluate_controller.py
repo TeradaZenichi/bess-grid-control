@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from controllers import CONTROLLER_TYPE, Controller
-from controllers.config import load_config
+from controllers.base import Config
 from controllers.normalization import ObservationScaling
 from opendss_environment import Action, EnvironmentConfig, MicrogridEnv, PhaseAction, Reward, TotalAction
 from opendss_environment.results_scripts.summary import save_summary
@@ -27,7 +27,7 @@ def year_windows(config, groups=None):
     source = json.loads(case.read_text(encoding="utf-8"))
     timestamps = pd.to_datetime(pd.read_csv(case.parent / source["files"]["demand"],
                                           usecols=["timestamp"])["timestamp"], utc=True)
-    years = timestamps.dt.tz_convert(config.timezone).dt.year.to_numpy()
+    years = timestamps.dt.tz_convert(config.observation_timezone).dt.year.to_numpy()
     windows = []
     for group, selected_years in config.years.items():
         if groups is not None and group not in groups:
@@ -123,9 +123,12 @@ def run_year(config, group, year, start, steps, expected_steps, folder):
 
 
 def evaluate(settings=None, groups=None):
-    config = load_config(CONFIG, settings)
+    config = Config(CONFIG, vars(Config.controller()) | (settings or {}))
+    policy_config = Config.controller(settings=config.controller_settings | {
+        "case_path": config.case_path, "seed": config.seed,
+    })
     run = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-    output = ROOT / config.output_path / CONTROLLER_TYPE / run
+    output = policy_config.output_path(f"evaluation_{run}", root=ROOT / config.output_root)
     rows = [run_year(config, group, year, start, steps, expected, output / group / str(year))
             for group, year, start, steps, expected in year_windows(config, groups)]
     frame = pd.DataFrame(rows)

@@ -15,6 +15,12 @@
     "vuf_ref_pct": 2.0,
     "price_ref_per_kwh": 0.20
   },
+  "training_split": {
+    "year": 2023,
+    "timezone": "Europe/Zurich",
+    "validation_start_day": 15,
+    "validation_end_day": 22
+  },
   "network": {
     "master": "dss/Master.dss",
     "slack_bus": "bus_001",
