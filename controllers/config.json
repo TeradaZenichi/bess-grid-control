@@ -2,11 +2,17 @@
   "controller_type": "rule_based",
   "architecture": "mlp",
   "mode": "economic",
-  "bess_id": null,
+  "bess_id": "b1",
   "bus": null,
   "extra_features": ["grid", "branches"],
   "observation_timezone": "Europe/Zurich",
   "seed": 42,
   "case_path": "data/switzerland/5bus/config.json",
-  "reward_term": "node_cost"
+  "reward_term": "node_cost",
+  "evaluation": {
+    "output_root": "results/evaluations",
+    "years": {"train_eval": [2023], "test": [2024]},
+    "controller_settings": {},
+    "step_limit": null
+  }
 }

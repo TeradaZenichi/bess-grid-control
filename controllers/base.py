@@ -27,6 +27,9 @@ class Config(SimpleNamespace):
         return cls(FOLDER / kind / "config.json",
                    vars(common) | (settings or {}) | {"controller_type": kind})
 
+    def bess(self, data):
+        return next(device for device in data["devices"]["bess"] if device["id"] == self.bess_id)
+
     def output_path(self, trial, root=None):
         case = Path(self.case_path).parent
         case = case.relative_to(ROOT) if case.is_relative_to(ROOT) else case

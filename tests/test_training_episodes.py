@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 import pandas as pd
+import torch
 
 from controllers.episodes import monthly_episodes
 from controllers.base import Config
@@ -36,6 +37,8 @@ class TrainingEpisodesTest(unittest.TestCase):
         for block in validation:
             self.assertEqual(pd.Timestamp(block["start"]).day, 15)
             self.assertEqual(pd.Timestamp(block["end_exclusive"]).day, 22)
+            self.assertEqual(block["end_step_exclusive"] - block["start_step"], block["episode_steps"])
+            self.assertEqual(block["episode_steps"], 672)
 
     def test_train_initializes_selected_window_and_networks_without_stepping(self):
         with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
@@ -47,12 +50,23 @@ class TrainingEpisodesTest(unittest.TestCase):
                     trainer.config.architecture = architecture
                     trainer.config.episode_steps = 96
                     trainer.config.history_steps = 4
+                    trainer.config.num_training_episodes = 0
                     result = trainer.train()
                     self.assertEqual(result["status"], "episodes_ready")
                     self.assertIsNone(result["score"])
                     self.assertEqual(pd.Timestamp(result["initial_timestamp"]), pd.Timestamp(result["episodes"][0]["start"]))
                     self.assertEqual(result["input_size"], 132 if architecture == "mlp" else 32)
                     self.assertEqual(result["action_size"], 6)
+                    self.assertIsNot(trainer.env.train, trainer.env.eval)
+                    self.assertIsNot(trainer.env.train.dss, trainer.env.eval.dss)
+                    self.assertIsNot(trainer.observations, trainer.eval_observations)
+                    self.assertEqual(len(trainer.eval_observations.history), 0)
+                    self.assertEqual(trainer.validation, result["validation"])
+                    self.assertEqual(len(trainer.validation), 12)
+                    self.assertEqual(pd.Timestamp(trainer.env.eval.timestamps.iloc[0]),
+                                     pd.Timestamp(trainer.validation[0]["start"]))
+                    self.assertEqual(len(trainer.replay), 0)
+                    self.assertLess(trainer.replay.memory_bytes, 4 * 1024**2)
                     output = Path(result["output_path"])
                     self.assertEqual(json.loads((output / "initialization.json").read_text()), result)
                     self.assertEqual(output.parts[-3:], (architecture, result["trial"], "seed_42"))
@@ -61,9 +75,20 @@ class TrainingEpisodesTest(unittest.TestCase):
                     self.assertEqual(tuple(action.shape), (1, 6))
                     self.assertEqual(tuple(trainer.critic.q1(state, action).shape), (1, 1))
                     self.assertEqual(tuple(trainer.critic.q2(state, action).shape), (1, 1))
+                    for name, online in (("actor", trainer.actor), ("q1", trainer.critic.q1), ("q2", trainer.critic.q2)):
+                        target = getattr(trainer.target, name)
+                        for source, copied in zip(online.parameters(), target.parameters()):
+                            torch.testing.assert_close(source, copied)
+                            self.assertNotEqual(source.data_ptr(), copied.data_ptr())
+                            self.assertFalse(copied.requires_grad)
+                        source, copied = next(online.parameters()), next(target.parameters())
+                        before = copied.clone()
+                        with torch.no_grad():
+                            source.add_(1)
+                        torch.testing.assert_close(copied, before)
                     mask = trainer.initial_state[-4:] if architecture == "mlp" else trainer.initial_state["mask"]
                     self.assertEqual(mask.sum(), 1)
-                self.assertEqual(close.call_count, 2)
+                self.assertEqual(close.call_count, 4)
             step.assert_not_called()
 
 

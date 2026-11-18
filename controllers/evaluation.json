@@ -1,6 +1,0 @@
-{
-  "output_root": "results/evaluations",
-  "years": {"train_eval": [2023], "test": [2024]},
-  "controller_settings": {},
-  "step_limit": null
-}

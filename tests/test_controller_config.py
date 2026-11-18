@@ -12,13 +12,13 @@ class ControllerConfigTest(unittest.TestCase):
         self.assertEqual(rule.case_path, str(ROOT / "data/switzerland/5bus/config.json"))
         config = SACConfig(
             {"architecture": "gru", "reward_term": "feeder_cost", "seed": 17,
-             "learning_rate": 0.001, "extra_features": ["branches"]}, {"history_steps": 4})
+             "actor_lr": 0.001, "extra_features": ["branches"]}, {"history_steps": 4})
         trainer = SACTrainer(config)
         self.assertIs(trainer.config, config)
         self.assertEqual(rule.case_path, trainer.config.case_path)
         self.assertEqual(rule.mode, trainer.config.mode)
         self.assertEqual((config.controller_type, config.architecture, config.history_steps), ("sac", "gru", 4))
-        self.assertEqual((config.reward_term, config.seed, config.learning_rate), ("feeder_cost", 17, 0.001))
+        self.assertEqual((config.reward_term, config.seed, config.actor_lr), ("feeder_cost", 17, 0.001))
         config.extra_features.append("grid")
         self.assertEqual(SACTrainer().config.architecture, "mlp")
         self.assertEqual(SACTrainer().config.reward_term, "node_cost")

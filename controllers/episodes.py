@@ -30,4 +30,8 @@ def monthly_episodes(case_path, episode_steps, seed):
                    "end_exclusive": pd.Timestamp(year=split["year"], month=month, day=split["validation_end_day"],
                                                  tz=split["timezone"]).isoformat()}
                   for month in range(1, 13)]
+    for window in validation:
+        start = int(times.get_loc(pd.Timestamp(window["start"])))
+        end = int(times.get_loc(pd.Timestamp(window["end_exclusive"])))
+        window.update(start_step=start, end_step_exclusive=end, episode_steps=end - start)
     return episodes, validation

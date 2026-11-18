@@ -18,23 +18,22 @@ from opendss_environment.results_scripts.summary import save_summary
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONFIG = ROOT / "controllers/evaluation.json"
 PROGRESS_STEPS = 3504
 
 
 def year_windows(config, groups=None):
-    case = ROOT / config.case_path
+    case = Path(config.case_path)
     source = json.loads(case.read_text(encoding="utf-8"))
     timestamps = pd.to_datetime(pd.read_csv(case.parent / source["files"]["demand"],
                                           usecols=["timestamp"])["timestamp"], utc=True)
     years = timestamps.dt.tz_convert(config.observation_timezone).dt.year.to_numpy()
     windows = []
-    for group, selected_years in config.years.items():
+    for group, selected_years in config.evaluation["years"].items():
         if groups is not None and group not in groups:
             continue
         for year in selected_years:
             indices = np.flatnonzero(years == year)
-            steps = min(len(indices), config.step_limit or len(indices))
+            steps = min(len(indices), config.evaluation["step_limit"] or len(indices))
             windows.append((group, year, int(indices[0]), steps, len(indices)))
     return windows
 
@@ -42,13 +41,13 @@ def year_windows(config, groups=None):
 def run_year(config, group, year, start, steps, expected_steps, folder):
     started = perf_counter()
     folder.mkdir(parents=True)
-    env = MicrogridEnv(EnvironmentConfig(ROOT / config.case_path, steps, start_step=start))
+    env = MicrogridEnv(EnvironmentConfig(config.case_path, steps, start_step=start))
     try:
         observation, _ = env.reset(seed=config.seed)
         if CONTROLLER_TYPE == "sac":
             import torch
             torch.manual_seed(config.seed)  # Identical untrained weights across periods.
-        policies = [Controller(device, config.controller_settings,
+        policies = [Controller(device, config.evaluation["controller_settings"],
                                scaling=ObservationScaling.from_environment(env, device["bus"]))
                     for device in env.data["devices"].get("bess", [])]
         env.reward_function = Reward(controllers={policy.id: {
@@ -123,12 +122,13 @@ def run_year(config, group, year, start, steps, expected_steps, folder):
 
 
 def evaluate(settings=None, groups=None):
-    config = Config(CONFIG, vars(Config.controller()) | (settings or {}))
-    policy_config = Config.controller(settings=config.controller_settings | {
+    config = Config.controller()
+    config.evaluation.update(settings or {})
+    policy_config = Config.controller(settings=config.evaluation["controller_settings"] | {
         "case_path": config.case_path, "seed": config.seed,
     })
     run = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
-    output = policy_config.output_path(f"evaluation_{run}", root=ROOT / config.output_root)
+    output = policy_config.output_path(f"evaluation_{run}", root=ROOT / config.evaluation["output_root"])
     rows = [run_year(config, group, year, start, steps, expected, output / group / str(year))
             for group, year, start, steps, expected in year_windows(config, groups)]
     frame = pd.DataFrame(rows)

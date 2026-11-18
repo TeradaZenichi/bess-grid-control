@@ -10,6 +10,7 @@ from controllers.normalization import ObservationScaling
 from controllers.sac.architectures import MLP
 from controllers.sac.controller import SACController
 from controllers.sac.networks import Actor, Critic, observation_batch
+from controllers.sac.train import SACTrainer
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +26,26 @@ def state(architecture):
 
 
 class SACNetworksTest(unittest.TestCase):
+    def test_optimizer_groups_and_positive_learnable_alpha_reset_with_networks(self):
+        trainer = SACTrainer()
+        trainer.architecture(4, 2)
+        self.assertAlmostEqual(trainer.alpha.item(), trainer.config.alpha, places=6)
+        self.assertEqual(trainer.target_entropy, -2)
+        for name, parameters in (("actor", trainer.actor.parameters()),
+                                 ("critic", trainer.critic.parameters()), ("alpha", [trainer.log_alpha])):
+            optimized = {id(p) for group in getattr(trainer.optimizer, name).param_groups for p in group["params"]}
+            self.assertEqual(optimized, {id(p) for p in parameters})
+            self.assertTrue(optimized.isdisjoint({id(p) for p in trainer.target.parameters()}))
+        before = trainer.alpha.item()
+        trainer.optimizer.alpha.zero_grad()
+        (-trainer.log_alpha).backward()
+        trainer.optimizer.alpha.step()
+        self.assertGreater(trainer.alpha.item(), before)
+        self.assertTrue(all(p.grad is None for p in trainer.actor.parameters()))
+        trainer.architecture(4, 2)
+        self.assertAlmostEqual(trainer.alpha.item(), trainer.config.alpha, places=6)
+        self.assertEqual(len(trainer.optimizer.alpha.state), 0)
+
     def test_actor_twin_critics_shapes_gradients_and_independence(self):
         for architecture in ("mlp", "gru"):
             with self.subTest(architecture=architecture):

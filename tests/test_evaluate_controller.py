@@ -8,17 +8,17 @@ import pandas as pd
 
 from controllers.base import Config
 from controllers.rule_based.controller import RuleBasedController
-from tools.evaluate_controller import CONFIG, evaluate, year_windows
+from tools.evaluate_controller import evaluate, year_windows
 
 
 class ControllerEvaluationTest(unittest.TestCase):
     def test_local_year_windows_include_leap_year_and_have_no_overlap(self):
-        config = Config(CONFIG, vars(Config.controller()))
+        config = Config.controller()
         self.assertEqual(year_windows(config), [
             ("train_eval", 2023, 0, 35040, 35040),
             ("test", 2024, 35040, 35136, 35136),
         ])
-        config.step_limit = 4
+        config.evaluation["step_limit"] = 4
         self.assertEqual(year_windows(config, groups=("test",)), [("test", 2024, 35040, 4, 35136)])
 
     def test_evaluation_calls_controller_and_saves_separate_period_results(self):

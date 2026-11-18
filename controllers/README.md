@@ -74,7 +74,8 @@ architectures in the SAC actor and critics described below.
   `Config` resolves `case_path` against the repository root on loading; the JSON
   keeps a relative path, while the object stores an absolute string for JSON metadata.
 - `bess_id`, `bus`, `extra_features`: controlled device and local observation scope.
-  Set the device and bus after adding a BESS to the scenario.
+  Set `bess_id` explicitly (`b1` in the active case); training selects that ID
+  without falling back to the first BESS. `bus=null` uses the device's bus.
 - SAC `architecture`: `mlp` or `gru`, independent of `mode`.
 - [MLP settings](sac/architectures/mlp/config.json): layer sizes and history length.
 - [GRU settings](sac/architectures/gru/config.json): hidden size and history length.
@@ -243,13 +244,48 @@ bounds: the environment still applies joint apparent-power and SoC feasibility.
 Replay stores requested normalized actions; next observations contain the
 executed previous P/Q. Entropy/log-probabilities use normalized action coordinates.
 
+[train.py](sac/train.py) also defines `ReplayBuffer`, a uniform circular buffer.
+It keeps current/next feature vectors, normalized requested actions, reward and
+separate termination/truncation flags in preallocated NumPy arrays. Values use
+float32, flags use bool. It never stores full overlapping observation windows.
+An extra `history_steps - 1` transitions preserve the prefix needed by the oldest
+sampleable transition. `sample()` reconstructs causal windows and masks, returns
+CPU tensors and flattens only for MLP. Episode IDs prevent mixing reset windows.
+
+```python
+self.replay = ReplayBuffer(self.config, self.initial_state, action_size)
+# After each environment/encoder reset:
+self.replay.start_episode()
+# After collecting a transition:
+self.replay.add(state, action, reward, next_state, terminated, truncated)
+batch = self.replay.sample()  # config.batch_size; sampling with replacement
+```
+
+Collect from a freshly reset encoder; warm-up histories supplied before the first
+stored transition are not retained. Insertion copies values. End flags also mark
+an episode boundary automatically; explicit `start_episode()` handles early resets.
+The buffer remains across episodes, but each training/trial creates a fresh one.
+Evaluation transitions must never enter it. `len(buffer)` counts sampleable
+transitions; call `sample()` only after collecting data. `memory_bytes` reports
+array storage, excluding temporary batches and network memory. Persistent storage
+scales with `(capacity + history_steps) * feature_count`, while batch memory grows
+with `batch_size * history_steps * feature_count`.
+
+A true terminal transition may use `next_state=None`; its next feature vector is
+zero-filled and must be excluded from bootstrap using `terminated`. A time-limit
+truncation requires a valid final next observation, never the reset observation.
+The environment's current episode-end semantics still need alignment before SAC
+updates are implemented. The training scaffold allocates an empty replay buffer;
+it does not yet collect transitions or update networks.
+
 [train.py](sac/train.py) defines `SACTrainer` with a training/HPO contract and
 an architecture factory. Run `python train.py` through
 the [root entry point](../train.py), which also supports VS Code's Run/Debug Python
 File commands. Breakpoints can be placed in either file. The module command
-`python -m controllers.sac.train` also works. It prints a monthly episode plan,
-initializes its first environment/observation/actor/critics and closes that
-environment. It collects no transitions and updates no weights. It saves
+`python -m controllers.sac.train` also works. It initializes the local observation,
+actor/critics and two environments under `trainer.env.train` and `trainer.env.eval`.
+The existing episode loop runs default device operation; it does not insert
+transitions into replay or update weights. Both environments are closed at the end. It saves
 `initialization.json` with the effective settings, architecture settings and
 episode/validation plan in the derived output folder.
 
@@ -292,8 +328,8 @@ represented in each planned cycle; later training will repeat and resample cycle
 
 `episode_steps=672` means 168 elapsed hours at 15-minute resolution.
 `num_training_episodes=12` is the initial total training episode budget, editable
-through `trainer.config.num_training_episodes`. The collection loop is still pending.
-With that default, the budget covers one cycle of twelve monthly windows.
+through `trainer.config.num_training_episodes`. The existing loop samples windows
+with replacement; this count alone does not guarantee visiting all twelve months.
 
 Near DST,
 the local end hour can differ from midnight; the plan records the exact end.
@@ -304,16 +340,20 @@ The environment now also supports `env.reset(options={"start_step": i,
 Reuse the training environment for subsequent windows and reset the observation
 encoder separately. Validation should use another environment and encoder;
 actor/critics/replay stay with training, and validation transitions never enter
-replay. The annual evaluator already creates its own environments. The SAC
-training loop and periodic validation execution remain pending. `train()` currently
-opens only the first planned window, resets the BESS to its configured initial
-SoC and initializes a one-sample history with padding/mask. Window cutoffs and
+replay. `trainer.validation` stores the twelve fixed windows, including
+`start_step`, `end_step_exclusive` and `episode_steps`. They reuse the single
+`trainer.env.eval`, initially configured for January's validation week.
+`trainer.eval_observations` is separate from the training encoder and must be
+reset between validation windows. The default architecture history remains eight
+steps. The annual evaluator already creates its own environments. SAC updates
+and periodic validation execution remain pending. Each training reset restores
+the configured initial SoC. Window cutoffs and
 SAC bootstrap handling must be implemented before collecting training updates.
 
 ## Evaluation by year
 
 Run `python test.py` from the root, or use VS Code's Run/Debug Python File command
-on that entry point. [evaluation.json](evaluation.json) selects controller overrides,
+on that entry point. The `evaluation` key in [config.json](config.json) selects controller overrides,
 the output root and year groups: **2023 is `train_eval` and
 2024 is `test`**. These are whole-year inference runs, not weight updates.
 The SAC monthly training/validation split is separate; the annual evaluator
@@ -356,13 +396,24 @@ and action contract (the following are the current eight-step/per-phase sizes):
 trainer = SACTrainer()
 trainer.config.architecture = "mlp"
 trainer.config.hidden_sizes = [128, 64]
-trainer.config.learning_rate = 0.0001
+trainer.config.actor_lr = 0.0001
 actor, critics = trainer.architecture(264, 6)
 result = trainer.hpo(trial="trial_003")
 # After real training: the HPO trial objective is result["score"].
 ```
 
+`architecture()` also initializes `log_alpha`, with `alpha = exp(log_alpha)`
+exposed through `trainer.alpha`, and target entropy `-action_size` in normalized
+action coordinates. `config.alpha` is the initial coefficient. Optimizers are
+`trainer.optimizer.actor`, `.critic` (both online critics) and `.alpha` (log-alpha
+only), with JSON learning rates `actor_lr`, `critic_lr` and `alpha_lr`. Targets
+are excluded. Rebuilding the networks resets alpha and all optimizer states.
+Losses and automatic temperature updates remain pending in the training loop.
+
 The factory selects MLP/GRU through `ARCHITECTURES`, creates an independent actor,
+and frozen independent copies under `trainer.target.actor`, `trainer.target.q1`
+and `trainer.target.q2`. Target synchronization remains pending in the training loop.
+It also creates the online twin critics,
 Q1 and Q2, and returns them. Critics are available as `critics.q1`/`critics.q2`
 or `trainer.critic.q1`/`trainer.critic.q2`. Calling it again replaces the trainer's
 network references with fresh modules; no weights or replay are reused across trials.
