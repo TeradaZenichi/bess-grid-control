@@ -36,13 +36,16 @@ def _plot_voltages(frame, output):
     lower, upper = frame.min().min(), frame.max().max()
     margin = max((upper - lower) * 0.1, 0.0001)
     buses = dict.fromkeys(bus for bus, _ in frame)
-    fig, axes = plt.subplots(len(buses), 1, figsize=(14, 11), sharex=True, sharey=True)
+    fig, axes = plt.subplots(len(buses), 1, figsize=(14, 2.2 * len(buses)), sharex=True, sharey=True, squeeze=False)
+    axes = axes[:, 0]
     for axis, bus in zip(axes, buses):
         for phase in frame[bus]:
-            axis.plot(frame.index, frame[(bus, phase)], color=PHASE_COLORS[phase],
+            axis.step(frame.index, frame[(bus, phase)], where="post", color=PHASE_COLORS[phase],
                       linewidth=0.6, label=f"Phase {phase.upper()}")
         axis.set_ylabel(f"{bus}\nVoltage [pu]")
         axis.set_ylim(lower - margin, upper + margin)
+        axis.axhline(0.95, color="red", linestyle="--", linewidth=0.6)
+        axis.axhline(1.05, color="red", linestyle="--", linewidth=0.6)
         axis.grid(alpha=0.25)
     axes[0].legend(loc="lower left", ncol=3)
     axes[-1].set_xlabel("Time [UTC]")

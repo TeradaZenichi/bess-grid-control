@@ -1,0 +1,9 @@
+{
+  "case_path": "data/switzerland/5bus/config.json",
+  "output_path": "results/evaluations",
+  "timezone": "Europe/Zurich",
+  "years": {"train_eval": [2023], "test": [2024]},
+  "controller_settings": {"mode": "economic"},
+  "seed": 42,
+  "step_limit": null
+}

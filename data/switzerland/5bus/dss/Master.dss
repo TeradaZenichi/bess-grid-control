@@ -7,5 +7,13 @@ New Line.line_002_003 phases=3 bus1=bus_002 bus2=bus_003 length=1 units=none R1=
 New Line.line_003_004 phases=3 bus1=bus_003 bus2=bus_004 length=1 units=none R1=14.4 X1=19.2 R0=14.4 X0=19.2 C1=0 C0=0 NormAmps=31.4918328648887
 New Line.line_002_005 phases=3 bus1=bus_002 bus2=bus_005 length=1 units=none R1=12.0 X1=15.6 R0=12.0 X0=15.6 C1=0 C0=0 NormAmps=41.9891104865182
 
-Set VoltageBases=[11]
+! Synthetic distribution transformers: grounded LV neutral, fixed taps, Dy11.
+New XfmrCode.distribution phases=3 windings=2 conns=[delta wye] kVs=[11 0.381051177665153]
+~ %Rs=[0.5 0.5] XHL=4 %noloadloss=0.1 %imag=0.5
+New Transformer.t2 XfmrCode=distribution buses=[bus_002.1.2.3 bus_002_lv.1.2.3.0] kVAs=[400 400] normhkVA=400 LeadLag=Euro
+New Transformer.t3 XfmrCode=distribution buses=[bus_003.1.2.3 bus_003_lv.1.2.3.0] kVAs=[250 250] normhkVA=250 LeadLag=Euro
+New Transformer.t4 XfmrCode=distribution buses=[bus_004.1.2.3 bus_004_lv.1.2.3.0] kVAs=[250 250] normhkVA=250 LeadLag=Euro
+New Transformer.t5 XfmrCode=distribution buses=[bus_005.1.2.3 bus_005_lv.1.2.3.0] kVAs=[250 250] normhkVA=250 LeadLag=Euro
+
+Set VoltageBases=[11 0.381051177665153]
 CalcVoltageBases

@@ -1,0 +1,18 @@
+{
+  "architecture": "mlp",
+  "mode": "economic",
+  "bess_id": null,
+  "bus": null,
+  "extra_features": ["grid", "branches"],
+  "observation_timezone": "Europe/Zurich",
+  "seed": 42,
+  "learning_rate": 0.0003,
+  "gamma": 0.99,
+  "batch_size": 256,
+  "replay_buffer_size": 10000,
+  "case_path": "data/switzerland/5bus/config.json",
+  "episode_steps": 96,
+  "start_step": 0,
+  "reward_term": "node_cost",
+  "output_path": "results/controllers/sac"
+}

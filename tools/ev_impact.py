@@ -136,15 +136,15 @@ def save_plots(loads, ev):
     worst_bus = min(ev["voltages"], key=lambda item: ev["voltages"][item].min())[0]
     label = EV_LABEL
     fig, axes = plt.subplots(2, 1, figsize=(13, 8), sharex=True)
-    axes[0].plot(timestamps, loads["minimum_voltage_pu"], label="Loads only", linewidth=1.5)
-    axes[0].plot(timestamps, ev["minimum_voltage_pu"], label=label, linewidth=1.5)
+    axes[0].step(timestamps, loads["minimum_voltage_pu"], where="post", label="Loads only", linewidth=1.5)
+    axes[0].step(timestamps, ev["minimum_voltage_pu"], where="post", label=label, linewidth=1.5)
     axes[0].axhline(0.95, color="tab:red", linestyle="--", label="Lower limit 0.95 pu")
     axes[0].set_ylabel("Minimum voltage [pu]")
     axes[0].legend(ncol=3)
     for phase, color in zip("abc", ("tab:red", "tab:blue", "tab:green")):
-        axes[1].plot(
+        axes[1].step(
             timestamps, ev["voltages"][(worst_bus, phase)],
-            color=color, label=f"{worst_bus} phase {phase.upper()}",
+            where="post", color=color, label=f"{worst_bus} phase {phase.upper()}",
         )
     axes[1].axhline(0.95, color="black", linestyle="--", linewidth=1)
     axes[1].set_ylabel("Voltage [pu]")
@@ -158,10 +158,10 @@ def save_plots(loads, ev):
     plt.close(fig)
 
     fig, axes = plt.subplots(2, 1, figsize=(13, 8), sharex=True)
-    axes[0].plot(timestamps, loads["grid_import_kw"], label="Grid import - loads only")
-    axes[0].plot(timestamps, ev["grid_import_kw"], label=f"Grid import - {label}")
-    axes[0].plot(timestamps, ev["ev_load_kw"], label="Aggregate EV load", linestyle="--")
-    axes[0].plot(timestamps, ev["ev_reactive_kvar"], label="Aggregate EV reactive", linestyle=":")
+    axes[0].step(timestamps, loads["grid_import_kw"], where="post", label="Grid import - loads only")
+    axes[0].step(timestamps, ev["grid_import_kw"], where="post", label=f"Grid import - {label}")
+    axes[0].step(timestamps, ev["ev_load_kw"], where="post", label="Aggregate EV load", linestyle="--")
+    axes[0].step(timestamps, ev["ev_reactive_kvar"], where="post", label="Aggregate EV reactive", linestyle=":")
     peak_power = max(ev["grid_import_kw"].max(), ev["ev_load_kw"].max())
     if 2000.0 <= 1.5 * peak_power:
         axes[0].axhline(2000.0, color="tab:red", linestyle=":", label="Grid limit 2000 kW")
@@ -175,10 +175,10 @@ def save_plots(loads, ev):
     colors = plt.cm.tab10.colors
     for index, element in enumerate(ev["branch_kw"]):
         color = colors[index % len(colors)]
-        axes[1].plot(timestamps, ev["branch_kw"][element], color=color, label=f"{element} - EV")
-        axes[1].plot(
+        axes[1].step(timestamps, ev["branch_kw"][element], where="post", color=color, label=f"{element} - EV")
+        axes[1].step(
             timestamps, loads["branch_kw"][element], color=color,
-            linestyle="--", linewidth=1, alpha=0.7, label=f"{element} - base",
+            where="post", linestyle="--", linewidth=1, alpha=0.7, label=f"{element} - base",
         )
     axes[1].set_ylabel("Upstream active flow [kW]")
     axes[1].set_xlabel("Time [UTC]")

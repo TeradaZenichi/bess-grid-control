@@ -1,3 +1,10 @@
-"""Select the controller type before importing the public Controller class."""
+"""Load JSON values into a simple configuration object."""
+from copy import deepcopy
+import json
+from pathlib import Path
+from types import SimpleNamespace
 
-CONTROLLER_TYPE = "rule_based"  # "rule_based" or "sac"
+
+def load_config(path, settings=None):
+    values = json.loads(Path(path).read_text(encoding="utf-8"))
+    return SimpleNamespace(**(values | deepcopy(settings or {})))

@@ -1,11 +1,47 @@
 {
   "scenario_note": "Realistic synthetic placement: 18x7 kW, 4x22 kW and 2x50 kW EVSEs.",
-  "bess": [],
-  "pv": [],
+  "bess": [
+    {
+      "id": "b1",
+      "bus": "bus_004_lv",
+      "phases": ["a", "b", "c"],
+      "connection": "wye",
+      "dispatch_mode": "per_phase",
+      "e_cap_kwh": 100.0,
+      "p_charge_max_kw": 40.0,
+      "p_discharge_max_kw": 40.0,
+      "s_max_kva": 50.0,
+      "reactive_control": true,
+      "q_loss_rated_kw": 0.5,
+      "eta_charge": 0.95,
+      "eta_discharge": 0.95,
+      "soc_init_frac": 0.5,
+      "soc_min_frac": 0.1,
+      "soc_max_frac": 1.0,
+      "cyclic_soc": false
+    }
+  ],
+  "pv": [
+    {
+      "id": "pv1",
+      "bus": "bus_005",
+      "phases": ["a", "b", "c"],
+      "connection": "wye",
+      "dispatch_mode": "aggregate",
+      "p_max_kw": 200.0,
+      "s_max_kva": 200.0,
+      "q_loss_rated_kw": 0.0,
+      "night_var": false,
+      "profile": "pv.csv:pv1_kw",
+      "control": "fixed_pf",
+      "curtailable": false,
+      "power_factor": 1.0
+    }
+  ],
   "evse": [
     {
       "id": "e137",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "a"
       ],
@@ -19,7 +55,7 @@
     },
     {
       "id": "e142",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "b"
       ],
@@ -33,7 +69,7 @@
     },
     {
       "id": "e144",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "c"
       ],
@@ -47,7 +83,7 @@
     },
     {
       "id": "e160",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "a"
       ],
@@ -61,7 +97,7 @@
     },
     {
       "id": "e167",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "b"
       ],
@@ -75,7 +111,7 @@
     },
     {
       "id": "e172",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "c"
       ],
@@ -89,7 +125,7 @@
     },
     {
       "id": "e183",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "a"
       ],
@@ -103,7 +139,7 @@
     },
     {
       "id": "e185",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "b"
       ],
@@ -117,7 +153,7 @@
     },
     {
       "id": "e197",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "c"
       ],
@@ -131,7 +167,7 @@
     },
     {
       "id": "e209",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "a"
       ],
@@ -145,7 +181,7 @@
     },
     {
       "id": "e215",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "b"
       ],
@@ -159,7 +195,7 @@
     },
     {
       "id": "e216",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "c"
       ],
@@ -173,7 +209,7 @@
     },
     {
       "id": "e218",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "a"
       ],
@@ -187,7 +223,7 @@
     },
     {
       "id": "e222",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "b"
       ],
@@ -201,7 +237,7 @@
     },
     {
       "id": "e227",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "c"
       ],
@@ -215,7 +251,7 @@
     },
     {
       "id": "e235",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "a"
       ],
@@ -229,7 +265,7 @@
     },
     {
       "id": "e236",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "b"
       ],
@@ -243,7 +279,7 @@
     },
     {
       "id": "e238",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "c"
       ],
@@ -257,7 +293,7 @@
     },
     {
       "id": "e054",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "a",
         "b",
@@ -273,7 +309,7 @@
     },
     {
       "id": "e059",
-      "bus": "bus_003",
+      "bus": "bus_003_lv",
       "phases": [
         "a",
         "b",
@@ -289,7 +325,7 @@
     },
     {
       "id": "e062",
-      "bus": "bus_004",
+      "bus": "bus_004_lv",
       "phases": [
         "a",
         "b",
@@ -305,7 +341,7 @@
     },
     {
       "id": "e065",
-      "bus": "bus_005",
+      "bus": "bus_005_lv",
       "phases": [
         "a",
         "b",
@@ -321,7 +357,7 @@
     },
     {
       "id": "e001",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "a",
         "b",
@@ -337,7 +373,7 @@
     },
     {
       "id": "e002",
-      "bus": "bus_002",
+      "bus": "bus_002_lv",
       "phases": [
         "a",
         "b",

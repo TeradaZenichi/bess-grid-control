@@ -1,18 +1,30 @@
 {
   "schema_version": 1,
   "formulation": "three_phase_ivr",
-  "name": "case5_realistic_ev",
+  "name": "case5_mv_lv_ev_pv_bess",
   "files": {
     "demand": "unbalanced_demand.csv",
     "prices": "../prices/standard_prices.csv",
     "devices": "devices.json",
+    "pv": "pv.csv",
     "ev_sessions": "../../EV/ev_sessions.csv"
   },
   "base": {"s_base_kva": 1000.0, "v_base_kv": 11.0},
+  "observation_scaling": {
+    "voltage_deviation_ref_pu": 0.05,
+    "vuf_ref_pct": 2.0,
+    "price_ref_per_kwh": 0.20
+  },
   "network": {
     "master": "dss/Master.dss",
     "slack_bus": "bus_001",
-    "representation": "three_phase"
+    "representation": "three_phase",
+    "load_bus_map": {
+      "bus_002": "bus_002_lv",
+      "bus_003": "bus_003_lv",
+      "bus_004": "bus_004_lv",
+      "bus_005": "bus_005_lv"
+    }
   },
   "grid": {
     "bus": "bus_001",

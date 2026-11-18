@@ -12,7 +12,7 @@ The project uses [powerflow-opendss-environment](https://github.com/TeradaZenich
 
 The resulting controllers are intended to be reusable components in future nodal and hierarchical energy management architectures.
 
-**Project status:** Initial research and development. Training pipelines, controller implementations, and experimental results are not yet available in this repository.
+**Project status:** Initial research and development. Local rule-based BESS control, neural observation encoding and SAC actor/critic networks are implemented. SAC training and HPO are commented scaffolds; trained neural policies and comparative RL results are planned.
 
 ## Research Objective
 
@@ -32,6 +32,8 @@ The investigation focuses on:
 ## Simulation Environment
 
 The simulator is tracked as a Git submodule in `opendss_environment/`.
+See the [complete network diagram](docs/network-diagram.md) for the active
+topology, device/phase placement and the implemented MV/LV transformers.
 Requires Python 3.11+ and Git. From this repository root:
 
 ```powershell
@@ -45,16 +47,27 @@ implementation reference, not a dependency. See the
 [repository analysis](docs/repository-analysis.md) for reusable patterns,
 three-phase adaptation requirements and the simulator contract.
 
-Run one day of the realistic five-bus EV scenario with:
+Run one day of the realistic five-bus scenario with a 100 kWh / 40 kW BESS at
+`bus_004_lv`, ASAP EVSEs and a fixed 200 kW PV at `bus_005` with:
 
 ```powershell
 .\.venv\Scripts\python.exe main.py
 ```
 
+Conventional loads and EVSEs are on 220 V phase-neutral LV buses behind four
+distribution transformers. The BESS shares bus 004's LV aggregator; PV connects
+at 11 kV on bus 005, outside that aggregator. To evaluate this network
+with BESS P=Q=0, run `python -m tools.run_idle_bess`; outputs are saved in
+`results/mv_lv_idle_bess_day/`.
+
 Configure `EPISODE_STEPS`, `START_STEP`, `SEED` and `OUTPUT` at the top of
 `main.py`. Its loop contains only environment iteration and the controller call;
 reporting and impact analysis live in `tools/`. Results are written to
-`results/5bus_realistic_ev/`.
+`results/5bus_realistic_ev_pv/`.
+
+Time-series plots use post-step curves. Dispatched BESS active/reactive power
+uses bars aligned with each dispatch interval. Boxplots and aggregate comparisons
+retain their own chart types.
 
 Only active inputs remain visible in `data/EV/` and `data/switzerland/`.
 Generators and metadata are grouped in `data/EV/support/`; other datasets and
@@ -97,7 +110,7 @@ Local BESS implementations belong in [controllers/](controllers/README.md).
 Each controller type groups its scripts and Python configuration in one
 subdirectory. Neural architectures are variants within each algorithm,
 independent of operating modes. Documentation is centralized in
-`controllers/README.md`. Neural policies and the mode selector are planned;
+`controllers/README.md`. SAC networks are implemented and training/HPO are scaffolds; trained neural policies and the mode selector are planned;
 EVSEs remain in ASAP mode.
 
 The controller contract has four components.
