@@ -1,25 +1,29 @@
-"""SAC training/HPO contract and architecture construction."""
-from datetime import datetime, timezone
-from types import SimpleNamespace
+"""SAC training with sequential or parallel validation."""
+from contextlib import ExitStack
 from copy import deepcopy
+from datetime import datetime, timezone
 import json
 from time import perf_counter
+from types import SimpleNamespace
 
-from torch import nn
 import numpy as np
 import torch
+from torch import nn
+from torch.optim.swa_utils import get_ema_multi_avg_fn
 from tqdm import tqdm, trange
 
 from opendss_environment import EnvironmentConfig, MicrogridEnv, Reward
 from opendss_environment.data import load_data
 
-from .networks import Actor, Critic, observation_batch
-from ..normalization import ObservationScaling
-from torch.nn.functional import huber_loss
-from torch.optim.swa_utils import get_ema_multi_avg_fn
-from .observation import LocalObservation
 from ..episodes import split_episodes
+from ..normalization import ObservationScaling
 from . import Config
+from .evaluation import SACEvaluator
+from .networks import Actor, Critic, observation_batch
+from .observation import LocalObservation
+
+
+EVAL_WORKERS = None  # Auto: two workers on CPU, one with CUDA. Set 0 for sequential evaluation.
 
 
 class ReplayBuffer:
@@ -126,9 +130,14 @@ class ReplayBuffer:
 
 
 class SACTrainer:
-    def __init__(self, config=None):
+    def __init__(self, config=None, *, eval_workers=EVAL_WORKERS):
         self.config = config if config is not None else Config()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        if self.device.type == "cpu":
+            torch.set_num_threads(1)
+        self.overlap_evaluation = self.device.type == "cuda"
+        default_workers = 1 if self.overlap_evaluation else 2
+        self.eval_workers = default_workers if eval_workers is None else eval_workers
         self.data   = load_data(self.config.case_path)
         self.episodes, self.validation = split_episodes(self.data)
 
@@ -162,16 +171,18 @@ class SACTrainer:
             return {key: self._to_device(tensor) for key, tensor in value.items()}
         return value.to(self.device)
 
-    def encode_local(self, observation, *, evaluation=False):
-        env = self.env.eval if evaluation else self.env.train
-        encoder = self.eval_observations if evaluation else self.observations
-        local = env.observe_controller(
-            self.config.bus or encoder.bus, {"bess": [self.config.bess_id]},
+    def encode_local(self, observation):
+        local = self.env.train.observe_controller(
+            self.config.bus or self.observations.bus, {"bess": [self.config.bess_id]},
             observation=observation, extra_features=self.config.extra_features,
         )
-        return encoder.encode(local, flatten=self.config.flatten)
+        return self.observations.encode(local, flatten=self.config.flatten)
 
     def train(self, *, trial=None):
+        with ExitStack() as resources:
+            return self._train(resources, trial=trial)
+
+    def _train(self, resources, *, trial=None):
         """Train on chronological blocks and score the actor on held-out windows."""
         trial = trial or datetime.now(timezone.utc).strftime("trial_%Y%m%d_%H%M%S_%f")
         output = self.config.output_path(trial)
@@ -180,8 +191,6 @@ class SACTrainer:
         torch.manual_seed(self.config.seed)
         self.env = SimpleNamespace(
             train=MicrogridEnv(EnvironmentConfig(self.config.case_path, self.episodes[0]["episode_steps"]), data=self.data),
-            eval=MicrogridEnv(EnvironmentConfig(self.config.case_path, self.validation[0]["episode_steps"],
-                                               start_step=self.validation[0]["start_step"]), data=self.data),
         )
         start, steps = self.episodes[0]["start_step"], self.episodes[0]["episode_steps"]
         bess = self.config.bess(self.env.train.data)
@@ -189,7 +198,6 @@ class SACTrainer:
         initial_timestamp = observation["timestamp"]
         self.scaling        = ObservationScaling.from_environment(self.env.train, bess["bus"])
         self.observations   = LocalObservation(bess, self.scaling, self.config.history_steps, self.config.observation_timezone)
-        self.eval_observations = LocalObservation(bess, self.scaling, self.config.history_steps, self.config.observation_timezone)
         self.initial_state  = self.encode_local(observation)
         input_size          = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
         self.actions = self.env.train.controller_actions({"bess": [self.config.bess_id]}, seed=self.config.seed)
@@ -199,10 +207,14 @@ class SACTrainer:
 
         self.replay         = ReplayBuffer(self.config, self.initial_state, action_size)
         self.env.train.reward_function = Reward(controllers={self.config.bess_id: {"devices": {"bess": [self.config.bess_id]}, "buses": [bess["bus"]], "weights": {self.config.reward_term: 1.0}}})
+        self.evaluator = resources.enter_context(SACEvaluator(
+            self.config, self.data, self.validation, self.scaling, self.env.train.reward_function,
+            workers=self.eval_workers, overlap=self.overlap_evaluation))
 
         evaluation = None
         updated = False
-        for index in trange(self.config.num_training_episodes, desc="Train episodes", unit="ep", position=0):
+        episode_progress = trange(self.config.num_training_episodes, desc="Train episodes", unit="ep", position=0)
+        for index in episode_progress:
             started = perf_counter()
             reward_sum, updates = 0.0, 0
             totals = dict.fromkeys(("critic_loss", "actor_loss", "alpha_loss", "alpha"), 0.0)
@@ -213,7 +225,8 @@ class SACTrainer:
             self.replay.start_episode()
             terminated = truncated = False
             state = self.encode_local(observation)
-            with tqdm(total=steps, desc=f"Train episode {index + 1}", unit="step", position=1, leave=False) as progress:
+            action_steps = max(1, steps - 1)  # Reserve the last row for the bootstrap observation.
+            with tqdm(total=action_steps, desc=f"Train episode {index + 1}", unit="step", position=1, leave=False) as progress:
                 while not (terminated or truncated):
                     if self.replay.total < self.config.warmup_steps:
                         action = self.actions.action_space.sample()
@@ -221,15 +234,16 @@ class SACTrainer:
                         with torch.no_grad():
                             action, _ = self.actor(self._to_device(observation_batch([state])))
                             action = action[0].cpu().numpy()
-                    command = self.env.train.compose_actions(self.actions.command(action))
-                    next_observation, _, terminated, truncated, info = self.env.train.step(command)
+                    command = self.env.train.compose_actions(self.actions.command(action), observation=observation)
+                    next_observation, _, terminated, truncated, info = self.env.train.step(command, full_info=False)
+                    truncated = truncated or (not terminated and self.env.train.idx == action_steps)
                     reward = Reward.get_local(info["rewards"], self.config.bess_id)
                     reward_sum += reward
                     next_state = self.encode_local(next_observation) if next_observation is not None else None
                     self.replay.add(state, action, reward, next_state, terminated, truncated)
 
-                    # Before enabling backward, resolve window truncation and its final next_state.
-                    if self.replay.total >= self.config.learning_starts and len(self.replay) >= self.config.batch_size:
+                    if (self.replay.total >= self.config.learning_starts and len(self.replay) >= self.config.batch_size
+                            and self.replay.total % self.config.update_every == 0):
                         for name, value in self.update(self.replay.sample()).items():
                             totals[name] += value
                         updates += 1
@@ -249,19 +263,23 @@ class SACTrainer:
             with (output / "training.jsonl").open("a", encoding="utf-8") as stream:
                 stream.write(json.dumps(row, allow_nan=False) + "\n")
 
-            if updated and (completed % len(self.episodes) == 0 or completed == self.config.num_training_episodes):
-                current = self.evaluate() | {"episode": completed, "training_steps": self.replay.total}
-                if evaluation is None or current["score"] > evaluation["score"]:
-                    evaluation = current
-                    temporary = checkpoint.with_suffix(".tmp")
-                    torch.save({"actor": self.actor.state_dict(), "settings": vars(self.config),
-                                "scaling": vars(self.scaling), "evaluation": evaluation}, temporary)
-                    temporary.replace(checkpoint)
-                with (output / "validation.jsonl").open("a", encoding="utf-8") as stream:
-                    stream.write(json.dumps(current, allow_nan=False) + "\n")
+            current = None
+            if updated:
+                for current, weights in self._episode_evaluations(completed):
+                    if evaluation is None or current["score"] > evaluation["score"]:
+                        evaluation = current
+                        temporary = checkpoint.with_suffix(".tmp")
+                        torch.save({"actor": weights, "settings": vars(self.config),
+                                    "scaling": vars(self.scaling), "evaluation": evaluation}, temporary)
+                        temporary.replace(checkpoint)
+                    with (output / "validation.jsonl").open("a", encoding="utf-8") as stream:
+                        stream.write(json.dumps(current, allow_nan=False) + "\n")
+            metrics = {"train_reward": row["mean_reward"], "eval_score": current["score"] if current else "-"}
+            if current and current["episode"] != completed:
+                metrics["eval_ep"] = current["episode"]
+            episode_progress.set_postfix(metrics, refresh=False)
 
         self.env.train.close()
-        self.env.eval.close()
 
         result = {"status": "trained" if evaluation else "episodes_ready", "score": evaluation["score"] if evaluation else None,
                   "episodes": self.episodes, "validation": self.validation, "evaluation": evaluation,
@@ -320,28 +338,12 @@ class SACTrainer:
             "alpha": self.alpha.item(),
         }
 
-    @torch.no_grad()
-    def evaluate(self):
-        env = self.env.eval
-        env.reward_function = self.env.train.reward_function
-        monthly = []
-        for window in self.validation:
-            observation, _ = env.reset(seed=self.config.seed, options={"start_step": window["start_step"], "episode_steps": window["episode_steps"]})
-            self.eval_observations.reset()
-            reward_sum = 0.0
-            terminated = truncated = False
-            with tqdm(total=window["episode_steps"], desc=f'Validation month {window["month"]}', unit="step", position=1, leave=False) as progress:
-                while not (terminated or truncated):
-                    state = self.encode_local(observation, evaluation=True)
-                    action, _ = self.actor(self._to_device(observation_batch([state])), deterministic=True)
-                    command = env.compose_actions(self.actions.command(action[0].cpu().numpy()))
-                    observation, _, terminated, truncated, info = env.step(command)
-                    reward_sum += Reward.get_local(info["rewards"], self.config.bess_id)
-                    progress.update()
+    def _episode_evaluations(self, episode):
+        return self.evaluator.evaluate_episode(self.actor, episode, self.replay.total,
+                                               final=episode == self.config.num_training_episodes)
 
-            monthly.append({"month": window["month"], "steps": env.idx, "reward_sum": reward_sum, "mean_reward": reward_sum / env.idx})
-        return {"score": sum(row["reward_sum"] for row in monthly) / sum(row["steps"] for row in monthly),
-                "monthly": monthly}
+    def evaluate(self):
+        return self.evaluator.evaluate(self.actor)
 
     def hpo(self, *, trial=None):
         # Create the objective, then assign trial suggestions directly to self.config.

@@ -68,14 +68,16 @@ class TrainingEpisodesTest(unittest.TestCase):
                     self.assertEqual(pd.Timestamp(result["initial_timestamp"]), pd.Timestamp(result["episodes"][0]["start"]))
                     self.assertEqual(result["input_size"], 132 if architecture == "mlp" else 32)
                     self.assertEqual(result["action_size"], 6)
-                    self.assertIsNot(trainer.env.train, trainer.env.eval)
-                    self.assertIsNot(trainer.env.train.dss, trainer.env.eval.dss)
-                    self.assertIsNot(trainer.observations, trainer.eval_observations)
-                    self.assertEqual(len(trainer.eval_observations.history), 0)
                     self.assertEqual(trainer.validation, result["validation"])
                     self.assertEqual(len(trainer.validation), 12)
-                    self.assertEqual(pd.Timestamp(trainer.env.eval.timestamps.iloc[0]),
-                                     pd.Timestamp(trainer.validation[0]["start"]))
+                    self.assertIsNone(trainer.evaluator.env)
+                    with trainer.evaluator as evaluator:
+                        evaluator._setup_local()
+                        self.assertIsNot(trainer.env.train.dss, evaluator.env.dss)
+                        self.assertIsNot(trainer.observations, evaluator.observations)
+                        self.assertEqual(len(evaluator.observations.history), 0)
+                        self.assertEqual(pd.Timestamp(evaluator.env.timestamps.iloc[0]),
+                                         pd.Timestamp(trainer.validation[0]["start"]))
                     self.assertEqual(len(trainer.replay), 0)
                     self.assertLess(trainer.replay.memory_bytes, 4 * 1024**2)
                     output = Path(result["output_path"])
@@ -106,8 +108,8 @@ class TrainingEpisodesTest(unittest.TestCase):
         trainer = SACTrainer()
         trainer.config.num_training_episodes = 1
         first = trainer.episodes[0]
-        trainer.episodes = [first | {"episode_steps": 2, "end_step_exclusive": first["start_step"] + 2,
-                                   "end_exclusive": (pd.Timestamp(first["start"]) + pd.Timedelta(minutes=30)).isoformat()}]
+        trainer.episodes = [first | {"episode_steps": 3, "end_step_exclusive": first["start_step"] + 3,
+                                   "end_exclusive": (pd.Timestamp(first["start"]) + pd.Timedelta(minutes=45)).isoformat()}]
         with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
                 lambda config, trial: Config.output_path(config, trial, root=directory)):
             for warmup in (1000, 0):
@@ -116,27 +118,35 @@ class TrainingEpisodesTest(unittest.TestCase):
                 self.assertEqual(trainer.env.train.idx, 2)
                 self.assertEqual(trainer.actions.action_space.shape, (6,))
                 self.assertEqual(len(trainer.replay), 2)
-                self.assertEqual(trainer.replay.data["terminated"][:2, 0].tolist(), [False, True])
+                self.assertEqual(trainer.replay.data["terminated"][:2, 0].tolist(), [False, False])
+                self.assertEqual(trainer.replay.data["truncated"][:2, 0].tolist(), [False, True])
+                self.assertEqual(trainer.observations.last_timestamp, pd.Timestamp(first["start"]) + pd.Timedelta(minutes=30))
+                soc = trainer.observations.feature_names.index("soc_frac")
+                self.assertAlmostEqual(trainer.replay.data["next_state"][1, soc], trainer.env.train.bess_list[0].soc)
+                np.testing.assert_allclose(trainer.replay.sample()["discount"].numpy(), trainer.config.gamma)
                 self.assertTrue(np.isfinite(trainer.replay.data["reward"][:2]).all())
                 self.assertTrue((np.abs(trainer.replay.data["action"][:2]) <= 1).all())
 
     def test_train_scores_held_out_windows_without_adding_them_to_replay(self):
         trainer = SACTrainer()
-        trainer.config.num_training_episodes = 1
+        trainer.config.num_training_episodes = 2
         trainer.config.learning_starts = trainer.config.batch_size = 2
-        trainer.episodes = [trainer.episodes[0] | {"episode_steps": 2}]
+        trainer.config.update_every = 2
+        trainer.episodes = [episode | {"episode_steps": 5} for episode in trainer.episodes[:2]]
         trainer.validation = [window | {"episode_steps": steps}
                               for window, steps in zip(trainer.validation, (2, 3))]
         with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
                 lambda config, trial: Config.output_path(config, trial, root=directory)):
             result = trainer.train()
             output = Path(result["output_path"])
-            training = json.loads((output / "training.jsonl").read_text())
-            self.assertEqual((training["steps"], training["updates"]), (2, 1))
-            self.assertTrue(np.isfinite(training["mean_critic_loss"]))
+            training = [json.loads(line) for line in (output / "training.jsonl").read_text().splitlines()]
+            self.assertEqual([(row["steps"], row["updates"]) for row in training], [(4, 2), (4, 2)])
+            self.assertTrue(all(np.isfinite(row["mean_critic_loss"]) for row in training))
             checkpoint = torch.load(result["checkpoint"], weights_only=True, map_location="cpu")
             self.assertEqual(checkpoint["evaluation"], result["evaluation"])
-            self.assertEqual(json.loads((output / "validation.jsonl").read_text()), result["evaluation"])
+            validation = [json.loads(line) for line in (output / "validation.jsonl").read_text().splitlines()]
+            self.assertEqual([(row["episode"], row["training_steps"]) for row in validation], [(1, 4), (2, 8)])
+            self.assertEqual(max(validation, key=lambda row: row["score"]), result["evaluation"])
             trainer.actor = SACController.from_checkpoint(trainer.config.bess(trainer.data), checkpoint).actor.to(trainer.device)
             self.assertAlmostEqual(trainer.evaluate()["score"], result["score"])
             annual = evaluate({"checkpoint": result["checkpoint"], "step_limit": 2, "output_root": directory})
@@ -149,8 +159,10 @@ class TrainingEpisodesTest(unittest.TestCase):
         self.assertEqual([(row["month"], row["steps"]) for row in monthly], [(1, 2), (2, 3)])
         self.assertAlmostEqual(result["score"], sum(row["reward_sum"] for row in monthly) / 5)
         self.assertTrue(np.isfinite(result["score"]))
-        self.assertEqual(trainer.env.train.idx, 2)
-        self.assertEqual(trainer.replay.total, 2)
+        self.assertEqual(trainer.env.train.idx, 4)
+        self.assertEqual(trainer.replay.total, 8)
+        soc = trainer.observations.feature_names.index("soc_frac")
+        np.testing.assert_allclose(trainer.replay.data["state"][[0, 4], soc], 0.5)
 
     def test_trials_reuse_loaded_data_and_plans_without_reading_csv_again(self):
         with patch("controllers.sac.train.load_data", wraps=load_data) as loader:
@@ -167,10 +179,10 @@ class TrainingEpisodesTest(unittest.TestCase):
                     self.assertIs(trainer.episodes, episodes)
                     self.assertIs(trainer.validation, validation)
                     self.assertIs(trainer.env.train.data["demand"], data["demand"])
-                    self.assertIs(trainer.env.eval.data["demand"], data["demand"])
+                    self.assertIs(trainer.evaluator.data, data)
+                    self.assertIs(trainer.evaluator.windows, validation)
                     self.assertNotIn("start_step", data)
                     self.assertEqual(trainer.env.train.data["start_step"], 0)
-                    self.assertEqual(trainer.env.eval.data["start_step"], validation[0]["start_step"])
             loader.assert_called_once()
 
 

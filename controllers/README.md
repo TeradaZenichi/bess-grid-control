@@ -30,6 +30,7 @@ controllers/
     sac/observation.py
     sac/networks.py
     sac/train.py
+    sac/evaluation.py
     sac/architectures/__init__.py
     sac/architectures/mlp/__init__.py
     sac/architectures/mlp/config.json
@@ -37,9 +38,9 @@ controllers/
     sac/architectures/gru/config.json
 ```
 
-Policies live in each type's `controller.py`; `train.py` contains `SACTrainer`.
-Add `evaluate.py` when needed. Architecture-specific network code belongs under
-`architectures/`.
+Policies live in each type's `controller.py`. The SAC trainer is in `train.py`,
+and `evaluation.py` contains `SACEvaluator`. Architecture-specific network code
+belongs under `architectures/`.
 
 Each architecture package defines its class in `__init__.py`. The common
 `ARCHITECTURES` dictionary selects the class used by `SACController`:
@@ -291,19 +292,21 @@ an architecture factory. Run `python train.py` through
 the [root entry point](../train.py), which also supports VS Code's Run/Debug Python
 File commands. Breakpoints can be placed in either file. The module command
 `python -m controllers.sac.train` also works. It initializes the local observation,
-actor/critics and two environments under `trainer.env.train` and `trainer.env.eval`.
+actor/critics and `trainer.env.train`. The evaluator creates its environments on demand.
 The episode loop uses random normalized actions during warm-up, then stochastic
 actor actions. It stores transitions in replay and updates weights after
 `learning_starts` once a batch is available.
-Both environments are closed at the end. Each trial creates its output directory
-before training. `training.jsonl` records rewards, elapsed time and mean update
-metrics per episode. `validation.jsonl` records each validation. `actor.pt`
+The trainer closes the environments and the validation process pool at the end.
+Each trial creates its output directory before training. `training.jsonl`
+records rewards, elapsed time and mean update metrics per episode.
+`validation.jsonl` records each validation. `actor.pt`
 stores the weights, settings, observation scaling and evaluation of the best
 validation score. `initialization.json` summarizes the run and points to that
 checkpoint.
 
-`SACTrainer(config=None)` accepts a SAC `Config` instance or creates one from the
-JSON defaults. It merges controller, SAC and architecture values in `self.config`.
+`SACTrainer(config=None, *, eval_workers=None)` accepts a SAC `Config` instance
+or creates one from the JSON defaults. It merges controller, SAC and architecture
+values in `self.config`.
 `train(*, trial=None)` uses that object directly. Change its attributes before
 calling training; no per-trial config copies or JSON reloads occur in `train()`.
 `config.network` selects the architecture class and `config.flatten` follows it.
@@ -314,8 +317,9 @@ It returns the episode plan, effective settings, and the best evaluation.
 run did not reach a training update. `trainer.initial_state` contains the
 encoded first observation for debugging.
 The requested normalized action belongs in replay; executed P/Q remains in
-the next observation. Episode boundaries must handle termination/truncation
-and clear the observation history correctly.
+the next observation. The SAC reserves the last row of each training block for
+the bootstrap observation and marks the last stored transition as truncated.
+Each reset starts with the configured initial SoC and clears observation history.
 
 `hpo(*, trial=None)` currently calls `train()` and returns that result.
 The root entry point stores it as `result` for inspection in the debugger.
@@ -336,8 +340,8 @@ from 10 to 24 calendar days, with interval counts accounting for DST.
 
 `SACTrainer.__init__()` loads scenario data once into `self.data`, then creates
 `self.episodes` and `self.validation` once. Repeated `train()` calls reuse these
-objects. Both environments share the loaded frames/profiles via `data=self.data`,
-while device state, results, dataset offsets and OpenDSS contexts stay separate.
+objects. Validation reuses the loaded frames/profiles and sends them once to each
+worker process. Device state, results, dataset offsets and OpenDSS contexts stay separate.
 Treat cached source data as read-only. Create a new trainer for another scenario
 or split; changing the seed does not change the calendar coverage.
 
@@ -348,19 +352,13 @@ length setting. This duration is separate from the eight-step observation histor
 `EnvironmentConfig(start_step=i, episode_steps=n)` selects `[i, i+n)`.
 The environment now also supports `env.reset(options={"start_step": i,
 "episode_steps": n})`, with absolute indices and overrides for that reset only.
-Reuse the training environment for subsequent windows and reset the observation
-encoder separately. Validation should use another environment and encoder;
-actor/critics/replay stay with training, and validation transitions never enter
-replay. `trainer.validation` stores the twelve fixed windows, including
-`start_step`, `end_step_exclusive` and `episode_steps`. They reuse the single
-`trainer.env.eval`, initially configured for January's validation week.
-`trainer.eval_observations` is separate from the training encoder and must be
-reset between validation windows. The default architecture history remains eight
-steps. Once training has updated the actor, `evaluate()` runs at the end of
-each training cycle and at the end of a final partial cycle. It uses deterministic
-actions and the training reward definition, and reports total and mean rewards
-for each validation month. The annual evaluator uses its own environments.
-Each training reset restores the configured initial SoC.
+`trainer.validation` stores twelve fixed windows. After the first actor update,
+the trainer validates a snapshot at the end of each episode using deterministic
+actions and the training reward. Each worker reuses its own environment and encoder.
+By default, CPU training waits for two workers to evaluate the windows. CUDA
+training can advance one episode while one CPU worker evaluates the snapshot.
+Set `EVAL_WORKERS = 0` in `train.py` for sequential validation. Each training
+reset restores the configured initial SoC.
 
 ## Evaluation by year
 
