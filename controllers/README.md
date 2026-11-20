@@ -241,8 +241,17 @@ For the active BESS, the action order is `[P_a, P_b, P_c, Q_a, Q_b, Q_c]`.
 The actor operates in [-1, 1]; `controller.command()` maps to device P/Q bounds
 in network pu. P is positive charging; Q is positive injection. These are box
 bounds: the environment still applies joint apparent-power and SoC feasibility.
-Replay stores requested normalized actions; next observations contain the
-executed previous P/Q. Entropy/log-probabilities use normalized action coordinates.
+Replay stores requested normalized actions.
+
+Controller-scoped spaces are obtained with
+`env.controller_actions({"bess": [bess_id]}, seed=seed)`. `SACTrainer.actions`
+uses that normalized space for warm-up; `SACController` uses the same
+`ControllerActions` conversion. A coordinator combines partial commands with
+`env.compose_actions(...)`, completing fixed devices and rejecting conflicting
+controllers. The trainer converts and composes warm-up/actor actions before `step()`.
+
+Next observations contain the executed previous P/Q. Entropy/log-probabilities
+use normalized action coordinates.
 
 [train.py](sac/train.py) also defines `ReplayBuffer`, a uniform circular buffer.
 It keeps current/next feature vectors, normalized requested actions, reward and
@@ -275,8 +284,8 @@ A true terminal transition may use `next_state=None`; its next feature vector is
 zero-filled and must be excluded from bootstrap using `terminated`. A time-limit
 truncation requires a valid final next observation, never the reset observation.
 The environment's current episode-end semantics still need alignment before SAC
-updates are implemented. The training scaffold allocates an empty replay buffer;
-it does not yet collect transitions or update networks.
+updates are implemented. Training now collects transitions and the selected local
+reward into replay; network updates remain pending.
 
 [train.py](sac/train.py) defines `SACTrainer` with a training/HPO contract and
 an architecture factory. Run `python train.py` through
@@ -284,8 +293,9 @@ the [root entry point](../train.py), which also supports VS Code's Run/Debug Pyt
 File commands. Breakpoints can be placed in either file. The module command
 `python -m controllers.sac.train` also works. It initializes the local observation,
 actor/critics and two environments under `trainer.env.train` and `trainer.env.eval`.
-The existing episode loop runs default device operation; it does not insert
-transitions into replay or update weights. Both environments are closed at the end. It saves
+The episode loop uses random normalized actions during warm-up, then stochastic
+actor actions. It stores transitions in replay without updating weights.
+Both environments are closed at the end. It saves
 `initialization.json` with the effective settings, architecture settings and
 episode/validation plan in the derived output folder.
 
@@ -313,27 +323,29 @@ The root entry point stores it as `result` for inspection in the debugger.
 Later, its objective will assign suggestions directly to `self.config`, call `train()`
 for each trial/seed with comparable budgets, and select the best validation
 score. Test periods/seeds remain separate. There is no HPO library or search
-algorithm configured yet. Shared scenario/seed values and the SAC episode length
-control initialization; reward/replay/optimizer settings remain reserved. The
+algorithm configured yet. Shared scenario/seed values control initialization. The
 default economic term is `node_cost`.
 Switch to `feeder_cost` for the other experiment, preserving actor observations.
 
 The scenario's `training_split` defines year 2023, Europe/Zurich time, and days
 15-21 of each month for validation (`validation_end_day=22` is exclusive).
-[episodes.py](episodes.py) samples one eligible local-midnight start per month,
-shuffles the month order and uses the trial seed. Every training timestamp in
-each window must belong to 2023 and fall outside those validation days.
-Consecutive allowed days can span a month boundary. All twelve months are
-represented in each planned cycle; later training will repeat and resample cycles.
+[episodes.py](episodes.py) builds all contiguous training and validation blocks in
+chronological order, without sampling. There are 13 training blocks (281 days,
+26,976 intervals) and 12 validation weeks (84 days, 8,064 intervals). Each 2023 row
+belongs to exactly one split; 2024 is excluded from both. Training blocks range
+from 10 to 24 calendar days, with interval counts accounting for DST.
 
-`episode_steps=672` means 168 elapsed hours at 15-minute resolution.
-`num_training_episodes=12` is the initial total training episode budget, editable
-through `trainer.config.num_training_episodes`. The existing loop samples windows
-with replacement; this count alone does not guarantee visiting all twelve months.
+`SACTrainer.__init__()` loads scenario data once into `self.data`, then creates
+`self.episodes` and `self.validation` once. Repeated `train()` calls reuse these
+objects. Both environments share the loaded frames/profiles via `data=self.data`,
+while device state, results, dataset offsets and OpenDSS contexts stay separate.
+Treat cached source data as read-only. Create a new trainer for another scenario
+or split; changing the seed does not change the calendar coverage.
 
-Near DST,
-the local end hour can differ from midnight; the plan records the exact end.
-This duration is separate from the network's eight-step observation history.
+`num_training_episodes=13` covers one full cycle by default. The loop visits
+blocks in chronological order and restarts from the first after the thirteenth.
+Each block determines its own `episode_steps`; there is no fixed SAC episode
+length setting. This duration is separate from the eight-step observation history.
 `EnvironmentConfig(start_step=i, episode_steps=n)` selects `[i, i+n)`.
 The environment now also supports `env.reset(options={"start_step": i,
 "episode_steps": n})`, with absolute indices and overrides for that reset only.

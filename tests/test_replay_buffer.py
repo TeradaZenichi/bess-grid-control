@@ -21,6 +21,35 @@ def observation(values, config):
 
 
 class ReplayBufferTest(unittest.TestCase):
+    def test_nsteps_stops_at_episode_end_and_preserves_wrapped_history(self):
+        for terminated in (False, True):
+            config = settings(capacity=3)
+            config.nsteps, config.gamma = 3, 0.5
+            replay = ReplayBuffer(config, observation([0], config), 1)
+            for i in range(4):
+                last = i == 3
+                replay.add(observation(list(range(i + 1)), config), [i], i + 1,
+                           observation(list(range(i + 2)), config),
+                           last and terminated, last and not terminated)
+                self.assertEqual(len(replay), (0, 0, 1, 3)[i])
+                if i == 2:
+                    full = replay.sample(1)
+                    self.assertEqual(full["reward"].item(), 2.75)
+                    self.assertEqual(full["discount"].item(), 0.125)
+            replay.add(observation([99], config), [99], 99, observation([100], config), False, False)
+            batch = replay.sample(32)
+            actions = batch["action"][:, 0]
+            self.assertEqual(set(actions.tolist()), {2, 3})
+            for i, reward, discount in ((2, 5, 0.25), (3, 4, 0.5)):
+                rows = actions == i
+                torch.testing.assert_close(batch["reward"][rows], torch.full_like(batch["reward"][rows], reward))
+                actual = batch["discount"][rows]
+                torch.testing.assert_close(actual, torch.full_like(actual, 0 if terminated else discount))
+                self.assertTrue((batch["terminated"][rows] == terminated).all())
+                self.assertTrue((batch["truncated"][rows] != terminated).all())
+                history = batch["next_state"]["history"][rows, :, 0]
+                torch.testing.assert_close(history, torch.tensor([1., 2., 3., 4.]).expand_as(history))
+
     def test_wraparound_preserves_exact_histories_flags_and_episode_boundaries(self):
         for flatten in (False, True):
             config = settings(flatten)
@@ -52,6 +81,7 @@ class ReplayBufferTest(unittest.TestCase):
                             self.assertAlmostEqual(batch["reward"][row].item(), action / 10, places=5)
                             self.assertEqual(batch["terminated"][row].item(), terminal)
                             self.assertEqual(batch["truncated"][row].item(), cutoff)
+                            self.assertAlmostEqual(batch["discount"][row].item(), 0 if terminal else 0.99)
             self.assertEqual(len(replay), config.replay_buffer_size)
 
     def test_insertion_copies_values_and_external_reset_clears_history(self):

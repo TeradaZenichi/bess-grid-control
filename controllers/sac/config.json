@@ -4,8 +4,10 @@
   "alpha_lr": 0.0003,
   "alpha": 0.2,
   "gamma": 0.99,
+  "nsteps": 1,
   "batch_size": 256,
+  "warmup_steps": 1000,
+  "learning_starts": 1000,
   "replay_buffer_size": 10000,
-  "episode_steps": 672,
-  "num_training_episodes": 12
+  "num_training_episodes": 13
 }

@@ -1,10 +1,10 @@
 """Local BESS policy; the actor starts untrained."""
 from copy import deepcopy
 
-import numpy as np
 import torch
 
-from opendss_environment import PhaseAction, TotalAction
+from opendss_environment import ControllerActions
+from opendss_environment.elements import BESSConfig
 
 from ..base import BaseController
 from . import Config
@@ -26,13 +26,10 @@ class SACController(BaseController):
         self.observations = LocalObservation(self.parameters, scaling, self.architecture_config.history_steps,
                                             self.config.observation_timezone)
         self.phases = tuple(bess["phases"])
-        count = len(self.phases) if bess["dispatch_mode"] == "per_phase" else 1
-        charge = min(bess["p_charge_max_kw"], bess["s_max_kva"]) / count
-        discharge = min(bess["p_discharge_max_kw"], bess["s_max_kva"]) / count
-        reactive = bess["s_max_kva"] / count if bess["reactive_control"] else 0
-        self.action_low = np.array([-discharge] * count + [-reactive] * count) / scaling.s_base_kva
-        self.action_high = np.array([charge] * count + [reactive] * count) / scaling.s_base_kva
-        self.action_size = 2 * count
+        self.actions = ControllerActions({"bess": [BESSConfig(**bess)]}, scaling.s_base_kva, seed=self.config.seed)
+        self.action_space = self.actions.action_space
+        self.action_low, self.action_high = self.actions.low, self.actions.high
+        self.action_size = self.action_space.shape[0]
         self.input_size = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
         self.actor = Actor(self.architecture, self.input_size, self.action_size, self.architecture_config)
 
@@ -48,11 +45,7 @@ class SACController(BaseController):
         return action[0].numpy(), log_prob.item()
 
     def command(self, action):
-        power = self.action_low + (np.asarray(action) + 1) * (self.action_high - self.action_low) / 2
-        p, q = np.split(power, 2)
-        if self.parameters["dispatch_mode"] == "aggregate":
-            return TotalAction(float(p[0]), float(q[0]))
-        return PhaseAction(dict(zip(self.phases, p.tolist())), dict(zip(self.phases, q.tolist())))
+        return self.actions.command(action).bess[self.id]
 
     def act(self, observation, objective=None):
         action, _ = self.sample(self.observe(observation), deterministic=True)

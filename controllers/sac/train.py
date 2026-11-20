@@ -5,16 +5,16 @@ from copy import deepcopy
 import json
 
 from torch import nn
-import pandas as pd
 import numpy as np
 import torch
 
-from opendss_environment import EnvironmentConfig, MicrogridEnv
+from opendss_environment import EnvironmentConfig, MicrogridEnv, Reward
+from opendss_environment.data import load_data
 
 from ..normalization import ObservationScaling
 from .observation import LocalObservation
-from ..episodes import monthly_episodes
-from .networks import Actor, Critic
+from ..episodes import split_episodes
+from .networks import Actor, Critic, observation_batch
 from . import Config
 
 
@@ -23,11 +23,16 @@ class ReplayBuffer:
 
     def __init__(self, config, observation, action_size):
         self.capacity = config.replay_buffer_size
+        self.nsteps = getattr(config, "nsteps", 1)
+        if type(self.nsteps) is not int or not 1 <= self.nsteps <= self.capacity:
+            raise ValueError("nsteps must be an integer between 1 and replay_buffer_size")
+        self.gamma = getattr(config, "gamma", 0.99)
         self.history_steps = config.history_steps
         self.flatten = config.flatten
         self.batch_size = config.batch_size
         self.rng = np.random.default_rng(config.seed)
         self.total, self.episode = 0, 0
+        self.episode_start = 0
         # Keep the prefix needed by the oldest sampleable transition.
         self.slots = self.capacity + self.history_steps - 1
         features = self._latest(observation).size
@@ -49,6 +54,7 @@ class ReplayBuffer:
     def start_episode(self):
         """Call after an external reset, together with the observation encoder reset."""
         self.episode += 1
+        self.episode_start = self.total
 
     def add(self, state, action, reward, next_state, terminated, truncated):
         slot = self.total % self.slots
@@ -66,24 +72,49 @@ class ReplayBuffer:
             return torch.from_numpy(np.concatenate((history.reshape(len(history), -1), mask), axis=1))
         return {"history": torch.from_numpy(history), "mask": torch.from_numpy(mask)}
 
-    def sample(self, batch_size=None):
-        indices = self.rng.integers(max(0, self.total - self.capacity), self.total,
-                                    size=self.batch_size if batch_size is None else batch_size)
+    def _history(self, indices):
         slots = indices % self.slots
         history_indices = indices[:, None] - np.arange(self.history_steps - 1, -1, -1)
         history_slots = history_indices % self.slots
         mask = (history_indices >= max(0, self.total - self.slots)) & (
             self.data["episode"][history_slots] == self.data["episode"][slots, None])
         history = np.where(mask[..., None], self.data["state"][history_slots], 0)
-        next_history = np.concatenate((history[:, 1:], self.data["next_state"][slots, None]), axis=1)
-        next_mask = np.concatenate((mask[:, 1:], np.ones((len(slots), 1), dtype=bool)), axis=1)
-        batch = {name: torch.from_numpy(self.data[name][slots])
-                 for name in ("action", "reward", "terminated", "truncated")}
+        return history, mask
+
+    def sample(self, batch_size=None):
+        oldest = max(0, self.total - self.capacity)
+        indices = self.rng.integers(oldest, oldest + len(self),
+                                    size=self.batch_size if batch_size is None else batch_size)
+        slots = indices % self.slots
+        end = indices.copy()
+        reward = self.data["reward"][slots]
+        discount = np.full_like(reward, self.gamma)
+        for _ in range(1, self.nsteps):
+            current, following = end % self.slots, (end + 1) % self.slots
+            advance = (end + 1 < self.total) & ~self.data["terminated"][current, 0] & ~self.data["truncated"][current, 0]
+            advance &= self.data["episode"][following] == self.data["episode"][current]
+            if not advance.any():
+                break
+            reward[advance] += discount[advance] * self.data["reward"][following[advance]]
+            discount[advance] *= self.gamma
+            end[advance] += 1
+
+        last = end % self.slots
+        history, mask = self._history(indices)
+        final_history, final_mask = (history, mask) if self.nsteps == 1 else self._history(end)
+        next_history = np.concatenate((final_history[:, 1:], self.data["next_state"][last, None]), axis=1)
+        next_mask = np.concatenate((final_mask[:, 1:], np.ones((len(last), 1), dtype=bool)), axis=1)
+        batch = {name: torch.from_numpy(self.data[name][last]) for name in ("terminated", "truncated")}
+        discount[self.data["terminated"][last]] = 0
+        batch.update(action=torch.from_numpy(self.data["action"][slots]),
+                     reward=torch.from_numpy(reward), discount=torch.from_numpy(discount))
         return batch | {"state": self._encode(history, mask),
                         "next_state": self._encode(next_history, next_mask)}
 
     def __len__(self):
-        return min(self.total, self.capacity)
+        # The newest starts in an open episode still need future rewards.
+        pending = min(self.nsteps - 1, self.total - self.episode_start)
+        return min(self.total, self.capacity) - pending
 
     @property
     def memory_bytes(self):
@@ -93,13 +124,15 @@ class ReplayBuffer:
 class SACTrainer:
     def __init__(self, config=None):
         self.config = config if config is not None else Config()
+        self.data   = load_data(self.config.case_path)
+        self.episodes, self.validation = split_episodes(self.data)
 
     def architecture(self, input_size, action_size):
-        self.actor      = Actor(self.config.network, input_size, action_size, self.config)
-        self.critic     = nn.Module()
-        self.critic.q1  = Critic(self.config.network, input_size, action_size, self.config)
-        self.critic.q2  = Critic(self.config.network, input_size, action_size, self.config)
-        self.target     = nn.Module()
+        self.actor        = Actor(self.config.network, input_size, action_size, self.config)
+        self.critic       = nn.Module()
+        self.critic.q1    = Critic(self.config.network, input_size, action_size, self.config)
+        self.critic.q2    = Critic(self.config.network, input_size, action_size, self.config)
+        self.target       = nn.Module()
         self.target.actor = deepcopy(self.actor)
         self.target.q1    = deepcopy(self.critic.q1)
         self.target.q2    = deepcopy(self.critic.q2)
@@ -117,69 +150,100 @@ class SACTrainer:
     def alpha(self):
         return self.log_alpha.exp()
 
-    def train(self, *, trial=None):
-        """Plan all months and initialize the first episode; SAC updates remain pending."""
-        torch.manual_seed(self.config.seed)
-        episodes, validation = monthly_episodes(self.config.case_path, self.config.episode_steps, self.config.seed)
-        self.validation = validation
-        self.env = SimpleNamespace(
-            train=MicrogridEnv(EnvironmentConfig(self.config.case_path, self.config.episode_steps)),
-            eval=MicrogridEnv(EnvironmentConfig(self.config.case_path, validation[0]["episode_steps"],
-                                               start_step=validation[0]["start_step"])),
+    def encode_local(self, observation):
+        local = self.env.train.observe_controller(
+            self.config.bus or self.observations.bus, {"bess": [self.config.bess_id]},
+            observation=observation, extra_features=self.config.extra_features,
         )
-        start, steps = episodes[0]["start_step"], episodes[0]["episode_steps"]
+        return self.observations.encode(local, flatten=self.config.flatten)
+
+    def train(self, *, trial=None):
+        """Reuse cached chronological windows; SAC updates remain pending."""
+        torch.manual_seed(self.config.seed)
+        self.env = SimpleNamespace(
+            train=MicrogridEnv(EnvironmentConfig(self.config.case_path, self.episodes[0]["episode_steps"]), data=self.data),
+            eval=MicrogridEnv(EnvironmentConfig(self.config.case_path, self.validation[0]["episode_steps"],
+                                               start_step=self.validation[0]["start_step"]), data=self.data),
+        )
+        start, steps = self.episodes[0]["start_step"], self.episodes[0]["episode_steps"]
         bess = self.config.bess(self.env.train.data)
         observation, _      = self.env.train.reset(seed=self.config.seed, options={"start_step": start, "episode_steps": steps})
         initial_timestamp = observation["timestamp"]
         self.scaling        = ObservationScaling.from_environment(self.env.train, bess["bus"])
         self.observations   = LocalObservation(bess, self.scaling, self.config.history_steps, self.config.observation_timezone)
         self.eval_observations = LocalObservation(bess, self.scaling, self.config.history_steps, self.config.observation_timezone)
-        local               = self.env.train.observe_controller(self.config.bus or bess["bus"], {"bess": [self.config.bess_id]}, observation=observation, extra_features=self.config.extra_features)
-        self.initial_state  = self.observations.encode(local, flatten=self.config.flatten)
+        self.initial_state  = self.encode_local(observation)
         input_size          = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
-        action_size         = 2 * (len(bess["phases"]) if bess["dispatch_mode"] == "per_phase" else 1)
+        self.actions = self.env.train.controller_actions({"bess": [self.config.bess_id]}, seed=self.config.seed)
+        action_size = self.actions.action_space.shape[0]
 
         self.architecture(input_size, action_size)
 
         self.replay         = ReplayBuffer(self.config, self.initial_state, action_size)
+        self.env.train.reward_function = Reward(controllers={self.config.bess_id: {"devices": {"bess": [self.config.bess_id]}, "buses": [bess["bus"]], "weights": {self.config.reward_term: 1.0}}})
 
-        for _ in range(self.config.num_training_episodes):
-            # choice a random episode from episodes
-            episode = episodes[torch.randint(len(episodes), (1,)).item()]
-            start, steps = episode["start_step"], episode["episode_steps"]
-            observation, _ = self.env.train.reset(seed=self.config.seed, options={"start_step": start, "episode_steps": steps})
+        for index in range(self.config.num_training_episodes):
+            episode         = self.episodes[index % len(self.episodes)]
+            start, steps    = episode["start_step"], episode["episode_steps"]
+            observation, _  = self.env.train.reset(seed=self.config.seed, options={"start_step": start, "episode_steps": steps})
             self.observations.reset()
             self.replay.start_episode()
             terminated = truncated = False
+            state = self.encode_local(observation)
             while not (terminated or truncated):
-                observation, reward, terminated, truncated, info = self.env.train.step()
+                if self.replay.total < self.config.warmup_steps:
+                    action = self.actions.action_space.sample()
+                else:
+                    with torch.no_grad():
+                        action, _ = self.actor(observation_batch([state]))
+                        action = action[0].cpu().numpy()
+                command = self.env.train.compose_actions(self.actions.command(action))
+                next_observation, _, terminated, truncated, info = self.env.train.step(command)
+                reward = Reward.get_local(info["rewards"], self.config.bess_id)
+                next_state = self.encode_local(next_observation) if next_observation is not None else None
+                self.replay.add(state, action, reward, next_state, terminated, truncated)
 
+                # Before enabling backward, resolve window truncation and its final next_state.
+                if self.replay.total >= self.config.learning_starts and len(self.replay) >= self.config.batch_size:
+                    self.update(self.replay.sample())
 
-            pass
-
-        # Iterate the plan for the training budget, then resample another monthly cycle.
-        # Reset physical state/history per episode; never put held-out transitions in replay.
-        # Reuse self.env.train.reset(options=...) for each training window.
-        # Reuse self.env.eval for self.validation windows and reset self.eval_observations.
-        # Never add validation transitions to replay.
-        # Treat artificial window cutoffs explicitly before implementing SAC bootstrap targets.
-        # Evaluate on validation periods/seeds; score is mean validation reward (higher is better).
-        # Save weights, configs, scales and metrics.
-        # Collection still uses default device operation; no weight updates are implemented.
-
+                state = next_state
+                observation = next_observation
 
         self.env.train.close()
         self.env.eval.close()
 
         trial = trial or datetime.now(timezone.utc).strftime("trial_%Y%m%d_%H%M%S_%f")
         output = self.config.output_path(trial)
-        result = {"status": "episodes_ready", "score": None, "episodes": episodes, "validation": validation,
+        result = {"status": "episodes_ready", "score": None, "episodes": self.episodes, "validation": self.validation,
                   "initial_timestamp": initial_timestamp, "input_size": input_size, "action_size": action_size,
                   "settings": deepcopy(vars(self.config)), "flatten": self.config.flatten,
                   "trial": trial, "output_path": str(output)}
         output.mkdir(parents=True, exist_ok=False)
         (output / "initialization.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
+
+    def update(self, batch):
+        # 1. Under no_grad, sample next actions/log_probs from the current actor.
+        with torch.no_grad():
+            next_action, next_log_prob = self.actor(batch["next_state"])
+            next_q1 = self.target.q1(batch["next_state"], next_action)
+            next_q2 = self.target.q2(batch["next_state"], next_action)
+            next_value = torch.minimum(next_q1, next_q2) - self.alpha * next_log_prob
+            backup = batch["reward"] + batch["discount"] * next_value
+
+        # 2. Sum the MSE losses of both online critics against the detached backup.
+        #    self.optimizer.critic.zero_grad(); critic_loss.backward(); self.optimizer.critic.step().
+        # 3. Freeze critic parameters, retaining gradients through sampled actor actions.
+        #    actor_loss = mean(self.alpha.detach() * log_prob - min(Q1, Q2)).
+        #    self.optimizer.actor.zero_grad(); actor_loss.backward(); self.optimizer.actor.step().
+        #    Re-enable critic parameter gradients afterwards.
+        # 4. alpha_loss = -(self.log_alpha * (log_prob + self.target_entropy).detach()).mean().
+        #    self.optimizer.alpha.zero_grad(); alpha_loss.backward(); self.optimizer.alpha.step().
+        # 5. Under no_grad, soft-update target critics: target = (1 - tau) * target + tau * online.
+        #    Add tau to the SAC configuration. Standard SAC does not use target.actor.
+        # Return detached loss values for logging, without retaining computation graphs.
+        pass
 
     def hpo(self, *, trial=None):
         # Create the objective, then assign trial suggestions directly to self.config.
