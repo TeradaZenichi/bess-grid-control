@@ -283,9 +283,8 @@ with `batch_size * history_steps * feature_count`.
 A true terminal transition may use `next_state=None`; its next feature vector is
 zero-filled and must be excluded from bootstrap using `terminated`. A time-limit
 truncation requires a valid final next observation, never the reset observation.
-The environment's current episode-end semantics still need alignment before SAC
-updates are implemented. Training now collects transitions and the selected local
-reward into replay; network updates remain pending.
+The environment currently reports window ends as terminal. Their replay
+discount is zero until the environment exposes a valid bootstrap observation.
 
 [train.py](sac/train.py) defines `SACTrainer` with a training/HPO contract and
 an architecture factory. Run `python train.py` through
@@ -294,10 +293,14 @@ File commands. Breakpoints can be placed in either file. The module command
 `python -m controllers.sac.train` also works. It initializes the local observation,
 actor/critics and two environments under `trainer.env.train` and `trainer.env.eval`.
 The episode loop uses random normalized actions during warm-up, then stochastic
-actor actions. It stores transitions in replay without updating weights.
-Both environments are closed at the end. It saves
-`initialization.json` with the effective settings, architecture settings and
-episode/validation plan in the derived output folder.
+actor actions. It stores transitions in replay and updates weights after
+`learning_starts` once a batch is available.
+Both environments are closed at the end. Each trial creates its output directory
+before training. `training.jsonl` records rewards, elapsed time and mean update
+metrics per episode. `validation.jsonl` records each validation. `actor.pt`
+stores the weights, settings, observation scaling and evaluation of the best
+validation score. `initialization.json` summarizes the run and points to that
+checkpoint.
 
 `SACTrainer(config=None)` accepts a SAC `Config` instance or creates one from the
 JSON defaults. It merges controller, SAC and architecture values in `self.config`.
@@ -306,14 +309,10 @@ calling training; no per-trial config copies or JSON reloads occur in `train()`.
 `config.network` selects the architecture class and `config.flatten` follows it.
 Assigning a different `config.architecture` loads its defaults; assign tuned
 history/layer values after selecting the architecture.
-It returns `{"status": "episodes_ready", "score": None, "episodes": [...],
-"validation": [...], "settings": {...}, "flatten": true}`, together
-with the first timestamp and input/action dimensions. `trainer.initial_state`
-contains the encoded first observation for debugging. After implementation, `score` will be a float:
-mean validation reward to maximize, not training return. No score is fabricated
-while the training loop remains a comment. Each run must create fresh
-networks, targets, replay and optimizers, train for its allocated budget,
-evaluate on validation periods/seeds, save the run and close the environment.
+It returns the episode plan, effective settings, and the best evaluation.
+`score` is the mean validation reward per simulated step, or `None` if the
+run did not reach a training update. `trainer.initial_state` contains the
+encoded first observation for debugging.
 The requested normalized action belongs in replay; executed P/Q remains in
 the next observation. Episode boundaries must handle termination/truncation
 and clear the observation history correctly.
@@ -357,10 +356,11 @@ replay. `trainer.validation` stores the twelve fixed windows, including
 `trainer.env.eval`, initially configured for January's validation week.
 `trainer.eval_observations` is separate from the training encoder and must be
 reset between validation windows. The default architecture history remains eight
-steps. The annual evaluator already creates its own environments. SAC updates
-and periodic validation execution remain pending. Each training reset restores
-the configured initial SoC. Window cutoffs and
-SAC bootstrap handling must be implemented before collecting training updates.
+steps. Once training has updated the actor, `evaluate()` runs at the end of
+each training cycle and at the end of a final partial cycle. It uses deterministic
+actions and the training reward definition, and reports total and mean rewards
+for each validation month. The annual evaluator uses its own environments.
+Each training reset restores the configured initial SoC.
 
 ## Evaluation by year
 
@@ -372,8 +372,11 @@ The SAC monthly training/validation split is separate; the annual evaluator
 still combines all of 2023 under `train_eval`.
 The controller type follows `controllers/config.json`; the default remains
 rule-based economic control. Scenario, seed and observation timezone come from
-the shared controller config. SAC currently has no trained checkpoint loader,
-so selecting it evaluates random initial weights and labels the report `untrained`.
+the shared controller config. Set `evaluation.checkpoint` in `controllers/config.json`
+to the path of a saved `actor.pt` to test that SAC policy. This selects SAC and uses
+its saved case, seed, architecture and observation scaling. With a checkpoint,
+the evaluator defaults to the test group only. Selecting SAC with an empty
+checkpoint evaluates random initial weights and labels the report `untrained`.
 
 [evaluate_controller.py](../tools/evaluate_controller.py) selects years in
 Europe/Zurich time: 2023 has 35,040 quarter-hours and leap year 2024 has 35,136.
@@ -420,7 +423,6 @@ action coordinates. `config.alpha` is the initial coefficient. Optimizers are
 `trainer.optimizer.actor`, `.critic` (both online critics) and `.alpha` (log-alpha
 only), with JSON learning rates `actor_lr`, `critic_lr` and `alpha_lr`. Targets
 are excluded. Rebuilding the networks resets alpha and all optimizer states.
-Losses and automatic temperature updates remain pending in the training loop.
 
 The factory selects MLP/GRU through `ARCHITECTURES`, creates an independent actor,
 and frozen independent copies under `trainer.target.actor`, `trainer.target.q1`

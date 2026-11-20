@@ -10,6 +10,7 @@
   "case_path": "data/switzerland/5bus/config.json",
   "reward_term": "node_cost",
   "evaluation": {
+    "checkpoint": null,
     "output_root": "results/evaluations",
     "years": {"train_eval": [2023], "test": [2024]},
     "controller_settings": {},

@@ -13,7 +13,7 @@ import pandas as pd
 from controllers import CONTROLLER_TYPE, Controller
 from controllers.base import Config
 from controllers.normalization import ObservationScaling
-from opendss_environment import Action, EnvironmentConfig, MicrogridEnv, PhaseAction, Reward, TotalAction
+from opendss_environment import Action, EnvironmentConfig, MicrogridEnv, Reward
 from opendss_environment.results_scripts.summary import save_summary
 
 
@@ -38,18 +38,22 @@ def year_windows(config, groups=None):
     return windows
 
 
-def run_year(config, group, year, start, steps, expected_steps, folder):
+def run_year(config, group, year, start, steps, expected_steps, folder, *, checkpoint=None):
     started = perf_counter()
     folder.mkdir(parents=True)
     env = MicrogridEnv(EnvironmentConfig(config.case_path, steps, start_step=start))
     try:
         observation, _ = env.reset(seed=config.seed)
-        if CONTROLLER_TYPE == "sac":
-            import torch
-            torch.manual_seed(config.seed)  # Identical untrained weights across periods.
-        policies = [Controller(device, config.evaluation["controller_settings"],
-                               scaling=ObservationScaling.from_environment(env, device["bus"]))
-                    for device in env.data["devices"].get("bess", [])]
+        if checkpoint is not None:
+            from controllers.sac.controller import SACController
+            policies = [SACController.from_checkpoint(config.bess(env.data), checkpoint)]
+        else:
+            if CONTROLLER_TYPE == "sac":
+                import torch
+                torch.manual_seed(config.seed)
+            policies = [Controller(device, config.evaluation["controller_settings"],
+                                   scaling=ObservationScaling.from_environment(env, device["bus"]))
+                        for device in env.data["devices"].get("bess", [])]
         env.reward_function = Reward(controllers={policy.id: {
             "devices": {"bess": [policy.id]}, "buses": [policy.bus], "weights": {"node_cost": 1.0},
         } for policy in policies})
@@ -59,16 +63,10 @@ def run_year(config, group, year, start, steps, expected_steps, folder):
             for step in range(steps):
                 commands = {}
                 for policy in policies:
-                    local = env.observe_controller(policy.bus, {"bess": [policy.id]},
+                    local = env.observe_controller(policy.config.bus or policy.bus, {"bess": [policy.id]},
                                                    extra_features=policy.extra_features, observation=observation)
                     commands[policy.id] = policy.act(local, {})
-                pv_actions = {
-                    pv.id: PhaseAction(observation["pv"][pv.id]["available_pu"])
-                    if pv.dispatch_mode == "per_phase"
-                    else TotalAction(sum(observation["pv"][pv.id]["available_pu"].values()))
-                    for pv in env.pv_list
-                }
-                observation, _, terminated, truncated, info = env.step(Action(bess=commands, pv=pv_actions))
+                observation, _, terminated, truncated, info = env.step(env.compose_actions(Action(bess=commands)))
                 flows = info["branch_measurements"]
                 if writer is None:
                     writer = csv.DictWriter(stream, fieldnames=["timestamp", *flows[0]])
@@ -107,13 +105,16 @@ def run_year(config, group, year, start, steps, expected_steps, folder):
             "elapsed_seconds": perf_counter() - started,
         }
         metadata = {
-            "controller_type": CONTROLLER_TYPE, "policy_status": "untrained" if CONTROLLER_TYPE == "sac" else "rule_based",
+            "controller_type": config.controller_type,
+            "policy_status": "trained" if checkpoint is not None else "untrained" if CONTROLLER_TYPE == "sac" else "rule_based",
             "config": vars(config), "start_step": start, "start": results["timestamps"].iloc[0].isoformat(),
             "end_exclusive": (results["timestamps"].iloc[-1] + pd.Timedelta(hours=env.dt)).isoformat(),
             "reset_each_year": True, "devices": env.data["devices"],
             "controller_settings": {policy.id: vars(policy.config) for policy in policies},
             "scaling": {policy.id: vars(policy.scaling) for policy in policies}, "metrics": metrics,
         }
+        if checkpoint is not None:
+            metadata["checkpoint_validation"] = checkpoint["evaluation"]
         (folder / "evaluation.json").write_text(json.dumps(metadata, indent=2, allow_nan=False), encoding="utf-8")
         print(f"[{group}/{year}] saved {env.idx} steps in {metrics['elapsed_seconds']:.1f}s", flush=True)
         return metrics
@@ -124,12 +125,22 @@ def run_year(config, group, year, start, steps, expected_steps, folder):
 def evaluate(settings=None, groups=None):
     config = Config.controller()
     config.evaluation.update(settings or {})
-    policy_config = Config.controller(settings=config.evaluation["controller_settings"] | {
-        "case_path": config.case_path, "seed": config.seed,
-    })
+    checkpoint = None
+    if path := config.evaluation.get("checkpoint"):
+        import torch
+        path = (ROOT / path).resolve()
+        config.evaluation["checkpoint"] = str(path)
+        checkpoint = torch.load(path, map_location="cpu", weights_only=True)
+        config = Config.controller("sac", checkpoint["settings"] | {"evaluation": config.evaluation})
+        groups = ("test",) if groups is None else groups
+        policy_config = config
+    else:
+        policy_config = Config.controller(settings=config.evaluation["controller_settings"] | {
+            "case_path": config.case_path, "seed": config.seed,
+        })
     run = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     output = policy_config.output_path(f"evaluation_{run}", root=ROOT / config.evaluation["output_root"])
-    rows = [run_year(config, group, year, start, steps, expected, output / group / str(year))
+    rows = [run_year(config, group, year, start, steps, expected, output / group / str(year), checkpoint=checkpoint)
             for group, year, start, steps, expected in year_windows(config, groups)]
     frame = pd.DataFrame(rows)
     frame.to_csv(output / "comparison.csv", index=False)

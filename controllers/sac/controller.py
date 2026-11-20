@@ -7,6 +7,7 @@ from opendss_environment import ControllerActions
 from opendss_environment.elements import BESSConfig
 
 from ..base import BaseController
+from ..normalization import ObservationScaling
 from . import Config
 from .networks import Actor, observation_batch
 from .observation import LocalObservation
@@ -32,6 +33,13 @@ class SACController(BaseController):
         self.action_size = self.action_space.shape[0]
         self.input_size = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
         self.actor = Actor(self.architecture, self.input_size, self.action_size, self.architecture_config)
+
+    @classmethod
+    def from_checkpoint(cls, bess, checkpoint):
+        policy = cls(bess, checkpoint["settings"], scaling=ObservationScaling(**checkpoint["scaling"]))
+        policy.actor.load_state_dict(checkpoint["actor"])
+        policy.actor.eval()
+        return policy
 
     def reset(self):
         self.observations.reset()

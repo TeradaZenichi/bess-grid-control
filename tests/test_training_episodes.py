@@ -13,7 +13,9 @@ from opendss_environment.data import load_data
 from controllers.base import Config
 from controllers.sac.networks import observation_batch
 from controllers.sac.train import SACTrainer
+from controllers.sac.controller import SACController
 from opendss_environment import MicrogridEnv
+from tools.evaluate_controller import evaluate
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -79,7 +81,7 @@ class TrainingEpisodesTest(unittest.TestCase):
                     output = Path(result["output_path"])
                     self.assertEqual(json.loads((output / "initialization.json").read_text()), result)
                     self.assertEqual(output.parts[-3:], (architecture, result["trial"], "seed_42"))
-                    state = observation_batch([trainer.initial_state])
+                    state = trainer._to_device(observation_batch([trainer.initial_state]))
                     action, _ = trainer.actor(state)
                     self.assertEqual(tuple(action.shape), (1, 6))
                     self.assertEqual(tuple(trainer.critic.q1(state, action).shape), (1, 1))
@@ -117,6 +119,38 @@ class TrainingEpisodesTest(unittest.TestCase):
                 self.assertEqual(trainer.replay.data["terminated"][:2, 0].tolist(), [False, True])
                 self.assertTrue(np.isfinite(trainer.replay.data["reward"][:2]).all())
                 self.assertTrue((np.abs(trainer.replay.data["action"][:2]) <= 1).all())
+
+    def test_train_scores_held_out_windows_without_adding_them_to_replay(self):
+        trainer = SACTrainer()
+        trainer.config.num_training_episodes = 1
+        trainer.config.learning_starts = trainer.config.batch_size = 2
+        trainer.episodes = [trainer.episodes[0] | {"episode_steps": 2}]
+        trainer.validation = [window | {"episode_steps": steps}
+                              for window, steps in zip(trainer.validation, (2, 3))]
+        with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
+                lambda config, trial: Config.output_path(config, trial, root=directory)):
+            result = trainer.train()
+            output = Path(result["output_path"])
+            training = json.loads((output / "training.jsonl").read_text())
+            self.assertEqual((training["steps"], training["updates"]), (2, 1))
+            self.assertTrue(np.isfinite(training["mean_critic_loss"]))
+            checkpoint = torch.load(result["checkpoint"], weights_only=True, map_location="cpu")
+            self.assertEqual(checkpoint["evaluation"], result["evaluation"])
+            self.assertEqual(json.loads((output / "validation.jsonl").read_text()), result["evaluation"])
+            trainer.actor = SACController.from_checkpoint(trainer.config.bess(trainer.data), checkpoint).actor.to(trainer.device)
+            self.assertAlmostEqual(trainer.evaluate()["score"], result["score"])
+            annual = evaluate({"checkpoint": result["checkpoint"], "step_limit": 2, "output_root": directory})
+            self.assertEqual(annual["year"].tolist(), [2024])
+            report, = Path(directory).rglob("evaluation.json")
+            metadata = json.loads(report.read_text())
+            self.assertEqual(metadata["policy_status"], "trained")
+            self.assertEqual(metadata["checkpoint_validation"]["score"], result["score"])
+        monthly = result["evaluation"]["monthly"]
+        self.assertEqual([(row["month"], row["steps"]) for row in monthly], [(1, 2), (2, 3)])
+        self.assertAlmostEqual(result["score"], sum(row["reward_sum"] for row in monthly) / 5)
+        self.assertTrue(np.isfinite(result["score"]))
+        self.assertEqual(trainer.env.train.idx, 2)
+        self.assertEqual(trainer.replay.total, 2)
 
     def test_trials_reuse_loaded_data_and_plans_without_reading_csv_again(self):
         with patch("controllers.sac.train.load_data", wraps=load_data) as loader:
