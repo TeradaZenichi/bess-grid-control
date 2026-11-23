@@ -24,6 +24,11 @@ class Actor(nn.Module):
         super().__init__()
         self.network = architecture(input_size, 2 * action_size, config)
 
+    def deterministic_action(self, observations):
+        """Return the squashed mean for callers that only need an action."""
+        mean, _ = encode(self.network, observations).chunk(2, dim=-1)
+        return mean.tanh()
+
     def forward(self, observations, deterministic=False):
         mean, log_std = encode(self.network, observations).chunk(2, dim=-1)
         distribution = Normal(mean, log_std.clamp(-20, 2).exp())

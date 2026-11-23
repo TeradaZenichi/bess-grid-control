@@ -283,8 +283,9 @@ with `batch_size * history_steps * feature_count`.
 A true terminal transition may use `next_state=None`; its next feature vector is
 zero-filled and must be excluded from bootstrap using `terminated`. A time-limit
 truncation requires a valid final next observation, never the reset observation.
-The environment currently reports window ends as terminal. Their replay
-discount is zero until the environment exposes a valid bootstrap observation.
+SAC reserves the last interval of each training block with at least two
+intervals for the continuation observation. It truncates after the preceding
+action, with the SoC and replay discount for that continuation state.
 
 [train.py](sac/train.py) defines `SACTrainer` with a training/HPO contract and
 an architecture factory. Run `python train.py` through
@@ -298,9 +299,13 @@ actor actions. It stores transitions in replay and updates weights after
 Both environments are closed at the end. Each trial creates its output directory
 before training. `training.jsonl` records rewards, elapsed time and mean update
 metrics per episode. `validation.jsonl` records each validation. `actor.pt`
-stores the weights, settings, observation scaling and evaluation of the best
-validation score. `initialization.json` summarizes the run and points to that
-checkpoint.
+stores the actor and both online critics, settings, observation scaling and
+evaluation of the best validation score. `initialization.json` summarizes the
+run and points to that checkpoint.
+Run `python train.py --campaign` for six sequential trials with discounts 0.99
+and 0.999, each with seeds 42, 43 and 44. The defaults use 104 episodes, CPU
+and four PyTorch threads. Set `device` to `cuda` to train on the GPU.
+`validation_wait_seconds` includes the final wait and is part of `elapsed_seconds`.
 
 `SACTrainer(config=None)` accepts a SAC `Config` instance or creates one from the
 JSON defaults. It merges controller, SAC and architecture values in `self.config`.
@@ -310,8 +315,12 @@ calling training; no per-trial config copies or JSON reloads occur in `train()`.
 Assigning a different `config.architecture` loads its defaults; assign tuned
 history/layer values after selecting the architecture.
 It returns the episode plan, effective settings, and the best evaluation.
-`score` is the mean validation reward per simulated step, or `None` if the
-run did not reach a training update. `trainer.initial_state` contains the
+`score` is the mean validation reward per simulated step, adjusted for terminal
+energy for node and feeder costs. Each window prices a deficit at the closing buy
+tariff divided by charging efficiency and credits surplus at the closing sell
+tariff times discharging efficiency. This estimates settlement at the meter.
+Monthly records include raw and adjusted costs, SoC, throughput and voltage
+violation hours. `trainer.initial_state` contains the
 encoded first observation for debugging.
 The requested normalized action belongs in replay; executed P/Q remains in
 the next observation. Episode boundaries must handle termination/truncation
@@ -356,10 +365,11 @@ replay. `trainer.validation` stores the twelve fixed windows, including
 `trainer.env.eval`, initially configured for January's validation week.
 `trainer.eval_observations` is separate from the training encoder and must be
 reset between validation windows. The default architecture history remains eight
-steps. Once training has updated the actor, `evaluate()` runs at the end of
-each training cycle and at the end of a final partial cycle. It uses deterministic
-actions and the training reward definition, and reports total and mean rewards
-for each validation month. The annual evaluator uses its own environments.
+steps. Starting with the first episode with a training update, each episode
+submits a validation to one background thread using a snapshot of the actor and
+critics. Training collects the pending result before submitting another
+validation or closing the environments. Validation uses deterministic actions
+and reports total and mean rewards for each month.
 Each training reset restores the configured initial SoC.
 
 ## Evaluation by year

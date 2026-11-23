@@ -1,4 +1,7 @@
 {
+  "device": "cpu",
+  "cpu_threads": 4,
+  "observe_evse": false,
   "actor_lr": 0.0003,
   "critic_lr": 0.0003,
   "alpha_lr": 0.0003,
@@ -10,5 +13,5 @@
   "warmup_steps": 1000,
   "learning_starts": 1000,
   "replay_buffer_size": 10000,
-  "num_training_episodes": 1000
+  "num_training_episodes": 104
 }

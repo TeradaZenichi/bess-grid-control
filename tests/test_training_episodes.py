@@ -1,6 +1,8 @@
 from pathlib import Path
 import json
 from tempfile import TemporaryDirectory
+from threading import Event
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -12,6 +14,7 @@ from controllers.episodes import split_episodes
 from opendss_environment.data import load_data
 from controllers.base import Config
 from controllers.sac.networks import observation_batch
+from controllers.sac.evaluation import Evaluator
 from controllers.sac.train import SACTrainer
 from controllers.sac.controller import SACController
 from opendss_environment import MicrogridEnv
@@ -70,6 +73,8 @@ class TrainingEpisodesTest(unittest.TestCase):
                     self.assertEqual(result["action_size"], 6)
                     self.assertIsNot(trainer.env.train, trainer.env.eval)
                     self.assertIsNot(trainer.env.train.dss, trainer.env.eval.dss)
+                    self.assertTrue(trainer.env.train.evse_list)
+                    self.assertNotIn("evse", trainer.env.train.observe())
                     self.assertIsNot(trainer.observations, trainer.eval_observations)
                     self.assertEqual(len(trainer.eval_observations.history), 0)
                     self.assertEqual(trainer.validation, result["validation"])
@@ -106,8 +111,8 @@ class TrainingEpisodesTest(unittest.TestCase):
         trainer = SACTrainer()
         trainer.config.num_training_episodes = 1
         first = trainer.episodes[0]
-        trainer.episodes = [first | {"episode_steps": 2, "end_step_exclusive": first["start_step"] + 2,
-                                   "end_exclusive": (pd.Timestamp(first["start"]) + pd.Timedelta(minutes=30)).isoformat()}]
+        trainer.episodes = [first | {"episode_steps": 3, "end_step_exclusive": first["start_step"] + 3,
+                                   "end_exclusive": (pd.Timestamp(first["start"]) + pd.Timedelta(minutes=45)).isoformat()}]
         with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
                 lambda config, trial: Config.output_path(config, trial, root=directory)):
             for warmup in (1000, 0):
@@ -116,27 +121,60 @@ class TrainingEpisodesTest(unittest.TestCase):
                 self.assertEqual(trainer.env.train.idx, 2)
                 self.assertEqual(trainer.actions.action_space.shape, (6,))
                 self.assertEqual(len(trainer.replay), 2)
-                self.assertEqual(trainer.replay.data["terminated"][:2, 0].tolist(), [False, True])
+                self.assertEqual(trainer.replay.data["terminated"][:2, 0].tolist(), [False, False])
+                self.assertEqual(trainer.replay.data["truncated"][:2, 0].tolist(), [False, True])
+                continuation = trainer.encode_local(trainer.env.train.observe())
+                np.testing.assert_array_equal(trainer.replay.data["next_state"][1], trainer.replay._latest(continuation))
+                torch.testing.assert_close(trainer.replay.sample(4)["discount"], torch.full((4, 1), trainer.config.gamma))
                 self.assertTrue(np.isfinite(trainer.replay.data["reward"][:2]).all())
                 self.assertTrue((np.abs(trainer.replay.data["action"][:2]) <= 1).all())
 
     def test_train_scores_held_out_windows_without_adding_them_to_replay(self):
         trainer = SACTrainer()
-        trainer.config.num_training_episodes = 1
+        trainer.config.num_training_episodes = 4
         trainer.config.learning_starts = trainer.config.batch_size = 2
-        trainer.episodes = [trainer.episodes[0] | {"episode_steps": 2}]
+        trainer.episodes = [window | {"episode_steps": 3} for window in trainer.episodes[:3]]
         trainer.validation = [window | {"episode_steps": steps}
                               for window, steps in zip(trainer.validation, (2, 3))]
+        validation_started, training_resumed = Event(), Event()
+        snapshots = {}
+        evaluate_actor, update_models = trainer.evaluate, trainer.update
+
+        def evaluate_snapshot(*, actor):
+            if not validation_started.is_set():
+                validation_started.set()
+                self.assertTrue(training_resumed.wait(10), "Episode 2 did not update during validation")
+            return evaluate_actor(actor=actor)
+
+        def update_during_validation(batch):
+            steps = trainer.replay.total
+            if steps == 3:
+                self.assertTrue(validation_started.wait(10), "Episode 1 did not start validation")
+            metrics = update_models(batch)
+            if steps % 2 == 0:
+                snapshots[steps] = {
+                    name: {key: value.cpu().clone() for key, value in model.state_dict().items()}
+                    for name, model in (("actor", trainer.actor), ("critic", trainer.critic))
+                }
+            if steps == 3:
+                training_resumed.set()
+            return metrics
+
         with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
                 lambda config, trial: Config.output_path(config, trial, root=directory)):
-            result = trainer.train()
+            with patch.object(trainer, "evaluate", evaluate_snapshot), patch.object(trainer, "update", update_during_validation):
+                result = trainer.train()
             output = Path(result["output_path"])
-            training = json.loads((output / "training.jsonl").read_text())
-            self.assertEqual((training["steps"], training["updates"]), (2, 1))
-            self.assertTrue(np.isfinite(training["mean_critic_loss"]))
+            training = [json.loads(row) for row in (output / "training.jsonl").read_text().splitlines()]
+            self.assertEqual([(row["steps"], row["updates"]) for row in training], [(2, 1)] + [(2, 2)] * 3)
+            self.assertTrue(np.isfinite([row["mean_critic_loss"] for row in training]).all())
             checkpoint = torch.load(result["checkpoint"], weights_only=True, map_location="cpu")
+            for name, expected in snapshots[checkpoint["evaluation"]["training_steps"]].items():
+                torch.testing.assert_close(checkpoint[name], expected, rtol=0, atol=0)
             self.assertEqual(checkpoint["evaluation"], result["evaluation"])
-            self.assertEqual(json.loads((output / "validation.jsonl").read_text()), result["evaluation"])
+            validations = [json.loads(row) for row in (output / "validation.jsonl").read_text().splitlines()]
+            self.assertEqual([row["episode"] for row in validations], [1, 2, 3, 4])
+            self.assertEqual(max(validations, key=lambda row: row["score"]), result["evaluation"])
             trainer.actor = SACController.from_checkpoint(trainer.config.bess(trainer.data), checkpoint).actor.to(trainer.device)
             self.assertAlmostEqual(trainer.evaluate()["score"], result["score"])
             annual = evaluate({"checkpoint": result["checkpoint"], "step_limit": 2, "output_root": directory})
@@ -147,10 +185,21 @@ class TrainingEpisodesTest(unittest.TestCase):
             self.assertEqual(metadata["checkpoint_validation"]["score"], result["score"])
         monthly = result["evaluation"]["monthly"]
         self.assertEqual([(row["month"], row["steps"]) for row in monthly], [(1, 2), (2, 3)])
-        self.assertAlmostEqual(result["score"], sum(row["reward_sum"] for row in monthly) / 5)
+        self.assertAlmostEqual(result["score"], -sum(row["adjusted_cost"] for row in monthly) / 5)
         self.assertTrue(np.isfinite(result["score"]))
         self.assertEqual(trainer.env.train.idx, 2)
-        self.assertEqual(trainer.replay.total, 2)
+        self.assertEqual(trainer.replay.total, 8)
+
+    def test_terminal_energy_is_settled_at_closing_buy_and_sell_tariffs(self):
+        battery = SimpleNamespace(id="b1", e_cap_kwh=100, soc_init_frac=0.5, eta_charge=0.8,
+                                  eta_discharge=0.9, array_charge_kw=[4], array_discharge_kw=[2])
+        env = SimpleNamespace(bess_list=[battery], dt=0.25, idx=2, results=SimpleNamespace(diagnostics=[]),
+                              grid=SimpleNamespace(prices=[1, 0.2], sell_prices=[1, 0.05]))
+        for soc, expected in ((0.4, 2.5), (0.5, 0.0), (0.6, -0.45)):
+            battery.soc = soc
+            metrics = Evaluator.energy_metrics(env, "b1", 10.0)
+            self.assertAlmostEqual(metrics["terminal_energy_cost"], expected)
+            self.assertAlmostEqual(metrics["adjusted_cost"], 10.0 + expected)
 
     def test_trials_reuse_loaded_data_and_plans_without_reading_csv_again(self):
         with patch("controllers.sac.train.load_data", wraps=load_data) as loader:

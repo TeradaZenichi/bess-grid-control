@@ -54,6 +54,9 @@ class SACNetworksTest(unittest.TestCase):
                                   controller.architecture_config) for _ in range(2)]
                 observations = observation_batch([state(architecture)] * 4)
                 actions, log_prob = controller.actor(observations)
+                deterministic, _ = controller.actor(observations, deterministic=True)
+                torch.testing.assert_close(controller.actor.deterministic_action(observations), deterministic,
+                                           rtol=0, atol=0)
                 values = [critic(observations, actions) for critic in critics]
                 self.assertEqual(actions.shape, (4, 6))
                 self.assertEqual(log_prob.shape, (4, 1))
