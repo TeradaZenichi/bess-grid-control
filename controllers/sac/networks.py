@@ -23,18 +23,23 @@ class Actor(nn.Module):
     def __init__(self, architecture, input_size, action_size, config):
         super().__init__()
         self.network = architecture(input_size, 2 * action_size, config)
+        self.power_actions = None
+
+    def project(self, observations, action):
+        return self.power_actions.project(observations, action) if self.power_actions is not None else action
 
     def deterministic_action(self, observations):
         """Return the squashed mean for callers that only need an action."""
         mean, _ = encode(self.network, observations).chunk(2, dim=-1)
-        return mean.tanh()
+        return self.project(observations, mean.tanh())
 
     def forward(self, observations, deterministic=False):
         mean, log_std = encode(self.network, observations).chunk(2, dim=-1)
         distribution = Normal(mean, log_std.clamp(-20, 2).exp())
         raw = mean if deterministic else distribution.rsample()
         log_prob = distribution.log_prob(raw) - 2 * (log(2) - raw - softplus(-2 * raw))
-        return raw.tanh(), log_prob.sum(dim=-1, keepdim=True)
+        # Entropy is measured on the latent squashed action; critics see normalized power.
+        return self.project(observations, raw.tanh()), log_prob.sum(dim=-1, keepdim=True)
 
 
 class Critic(nn.Module):

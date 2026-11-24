@@ -237,11 +237,16 @@ uses a hidden ReLU layer plus one scalar output. Actor, Q1 and Q2 share no weigh
 The initial MLP uses [64, 64]; GRU uses hidden size 64. The critic joint layer
 uses that architecture's final hidden size. See the [SAC reference](https://spinningup.openai.com/en/latest/algorithms/sac.html).
 
-For the active BESS, the action order is `[P_a, P_b, P_c, Q_a, Q_b, Q_c]`.
+In the default `per_phase` mode, the action order for this BESS is `[P_a, P_b, P_c, Q_a, Q_b, Q_c]`.
 The actor operates in [-1, 1]; `controller.command()` maps to device P/Q bounds
 in network pu. P is positive charging; Q is positive injection. These are box
 bounds: the environment still applies joint apparent-power and SoC feasibility.
 Replay stores requested normalized actions.
+
+Set `action_mode` in `sac/config.json` to `p_fixed` or `p_soc` for balanced
+active power with zero reactive power. Both store total P divided by the power
+rating in replay. `p_soc` also limits the actor and warm-up samples to the energy
+available in the current interval. Entropy is computed before that mapping.
 
 Controller-scoped spaces are obtained with
 `env.controller_actions({"bess": [bess_id]}, seed=seed)`. `SACTrainer.actions`

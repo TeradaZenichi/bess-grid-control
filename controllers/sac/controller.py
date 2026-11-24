@@ -3,8 +3,7 @@ from copy import deepcopy
 
 import torch
 
-from opendss_environment import ControllerActions
-from opendss_environment.elements import BESSConfig
+from .actions import ActivePowerActions, bess_actions
 
 from ..base import BaseController
 from ..normalization import ObservationScaling
@@ -27,16 +26,18 @@ class SACController(BaseController):
         self.observations = LocalObservation(self.parameters, scaling, self.architecture_config.history_steps,
                                             self.config.observation_timezone)
         self.phases = tuple(bess["phases"])
-        self.actions = ControllerActions({"bess": [BESSConfig(**bess)]}, scaling.s_base_kva, seed=self.config.seed)
+        self.actions = bess_actions(bess, scaling.s_base_kva, self.config)
         self.action_space = self.actions.action_space
         self.action_low, self.action_high = self.actions.low, self.actions.high
         self.action_size = self.action_space.shape[0]
         self.input_size = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
         self.actor = Actor(self.architecture, self.input_size, self.action_size, self.architecture_config)
+        if isinstance(self.actions, ActivePowerActions):
+            self.actor.power_actions = self.actions
 
     @classmethod
     def from_checkpoint(cls, bess, checkpoint):
-        policy = cls(bess, checkpoint["settings"], scaling=ObservationScaling(**checkpoint["scaling"]))
+        policy = cls(bess, {"action_mode": "per_phase"} | checkpoint["settings"], scaling=ObservationScaling(**checkpoint["scaling"]))
         policy.actor.load_state_dict(checkpoint["actor"])
         policy.actor.eval()
         return policy
@@ -45,6 +46,8 @@ class SACController(BaseController):
         self.observations.reset()
 
     def observe(self, observation):
+        if isinstance(self.actions, ActivePowerActions):
+            self.actions.dt = observation["dt_h"]
         return self.observations.encode(observation, flatten=self.config.flatten)
 
     def sample(self, state, deterministic=False):

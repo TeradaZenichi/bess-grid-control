@@ -10,6 +10,7 @@ from controllers.normalization import ObservationScaling
 from controllers.sac.architectures import MLP
 from controllers.sac.controller import SACController
 from controllers.sac.networks import Actor, Critic, observation_batch
+from controllers.sac.observation import FEATURE_NAMES
 from controllers.sac.train import SACTrainer
 
 
@@ -26,6 +27,25 @@ def state(architecture):
 
 
 class SACNetworksTest(unittest.TestCase):
+    def test_total_power_bounds_and_gradient_use_latest_soc(self):
+        soc = torch.tensor([0.1, 0.15, 0.5, 0.95, 1.0])
+        history = torch.zeros(5, 8, len(FEATURE_NAMES))
+        history[:, -1, FEATURE_NAMES.index("soc_frac")] = soc
+        mask = torch.ones(5, 8, dtype=torch.bool)
+        for arch in ("mlp", "gru"):
+            obs = torch.cat((history.flatten(1), mask), 1) if arch == "mlp" else {"history": history, "mask": mask}
+            policy = SACController(BESS, {"action_mode": "p_soc", "architecture": arch, "dt_h": 0.25}, scaling=SCALING)
+            u = torch.ones(5, 1, requires_grad=True)
+            low, high = (policy.actor.project(obs, x).flatten() * 40 for x in (-u, u))
+            torch.testing.assert_close(low, torch.tensor([0., -19., -40., -40., -40.]))
+            torch.testing.assert_close(high, torch.tensor([40., 40., 40., 5 / 0.2375, 0.]))
+            sampled, log_prob = policy.actor(obs)
+            self.assertTrue(((sampled.flatten() * 40 >= low) & (sampled.flatten() * 40 <= high)).all())
+            self.assertTrue(torch.isfinite(log_prob).all())
+            high.sum().backward()
+            self.assertTrue((u.grad > 0).all())
+            self.assertEqual(policy.command(np.array([0.25])).p_pu, 0.01)
+
     def test_optimizer_groups_and_positive_learnable_alpha_reset_with_networks(self):
         trainer = SACTrainer()
         trainer.architecture(4, 2)

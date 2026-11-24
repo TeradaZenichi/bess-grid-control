@@ -1,5 +1,6 @@
 {
   "device": "cpu",
+  "action_mode": "per_phase",
   "cpu_threads": 4,
   "observe_evse": false,
   "actor_lr": 0.0003,

@@ -16,6 +16,7 @@ from opendss_environment import EnvironmentConfig, MicrogridEnv, Reward
 from opendss_environment.data import load_data
 
 from .networks import Actor, Critic, observation_batch
+from .actions import ActivePowerActions, bess_actions
 from ..normalization import ObservationScaling
 from torch.nn.functional import huber_loss
 from torch.optim.swa_utils import get_ema_multi_avg_fn
@@ -138,6 +139,8 @@ class SACTrainer:
 
     def architecture(self, input_size, action_size):
         self.actor        = Actor(self.config.network, input_size, action_size, self.config)
+        if isinstance(getattr(self, "actions", None), ActivePowerActions):
+            self.actor.power_actions = self.actions
         self.critic       = nn.Module()
         self.critic.q1    = Critic(self.config.network, input_size, action_size, self.config)
         self.critic.q2    = Critic(self.config.network, input_size, action_size, self.config)
@@ -197,7 +200,8 @@ class SACTrainer:
         self.eval_observations = LocalObservation(bess, self.scaling, self.config.history_steps, self.config.observation_timezone)
         self.initial_state  = self.encode_local(observation)
         input_size          = self.observations.flat_size if self.config.flatten else self.observations.shape[1]
-        self.actions = self.env.train.controller_actions({"bess": [self.config.bess_id]}, seed=self.config.seed)
+        self.config.dt_h = self.env.train.dt
+        self.actions = bess_actions(bess, self.scaling.s_base_kva, self.config, self.data["phases"])
         action_size = self.actions.action_space.shape[0]
 
         self.architecture(input_size, action_size)
@@ -228,7 +232,7 @@ class SACTrainer:
                 with tqdm(total=rollout_steps, desc=f"Train episode {index + 1}", unit="step", position=1, leave=False) as progress:
                     while not (terminated or truncated):
                         if self.replay.total < self.config.warmup_steps:
-                            action = self.actions.action_space.sample()
+                            action = self.actor.project(state, self.actions.action_space.sample())
                         else:
                             with torch.no_grad():
                                 action, _ = self.actor(self._to_device(observation_batch([state])))

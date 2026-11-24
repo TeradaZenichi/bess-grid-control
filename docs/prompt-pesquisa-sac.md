@@ -1,0 +1,14 @@
+# Prompt de pesquisa sobre SAC e armazenamento de energia
+
+Analise o repositório TeradaZenichi/bess-grid-control, na branch `bess-sac-campaign`. Queremos saber se uma política causal consegue aprender o valor de guardar energia e reduzir a conta do nó no OpenDSS. Use a recompensa existente, `-node_cost`, e preserve o SAC padrão como controle experimental.
+
+Leia `controllers/sac/train.py`, `networks.py`, `actions.py`, `observation.py` e `evaluation.py` dentro de `controllers/sac/`. Confira no submódulo `opendss_environment` como a potência solicitada vira potência executada e como a energia comprada e vendida entra na conta. Distinga o modo padrão por fase do piloto `p_soc`, que controla potência ativa total com Q zero.
+
+Use estes resultados locais como ponto de partida. Nas 12 janelas de validação de 2023, o custo ajustado da bateria parada foi 11.824,31 e o da regra tarifária causal foi 11.702,51. Nos pilotos de três episódios com a seed 42, a exploração independente e a persistente produziram zero de 34 manhãs úteis com SoC entre 40% e 60% às 06h45. Em duas manhãs com SoC de 50%, um crítico experimental preferiu carregar e o ator descarregou. Essas medidas são diagnósticos. O critério econômico é a conta ajustada pela energia terminal. Quando os artefatos locais estiverem disponíveis, confira os valores em `results/exploration_ab_20261124/comparison.csv` e nos registros de validação.
+
+1. Formule hipóteses que distingam cobertura insuficiente no replay, erro na estimativa de retorno futuro e dificuldade do ator em aproveitar o crítico. Para cada hipótese, indique uma observação que a enfraqueceria.
+2. Desenhe primeiro um teste com checkpoints existentes. Compare o ator determinístico com uma busca unidimensional de potência fisicamente viável por meio de min(Q1, Q2). Valide as decisões em trajetórias completas no OpenDSS e explique como detectar superestimação de ações pouco observadas.
+3. Proponha um piloto pareado de SAC padrão versus SAC com trajetórias prévias da regra tarifária no replay. Gere demonstrações apenas nos blocos de treino. Especifique a mistura de amostras, as seeds e como igualar e contabilizar interações, atualizações e tempo de simulação. A política avaliada deve decidir sozinha.
+4. Compare custo ajustado, diferença pareada por janela, horas de violação de tensão e cobertura de SoC. Explique quais resultados justificariam mais seeds ou episódios e quais justificariam encerrar a hipótese. Reserve 2024 para o teste final após a escolha do protocolo.
+
+Entregue uma tabela com hipótese, evidência local, referência primária de RL, teste mínimo e critério de decisão. Identifique os scripts envolvidos e priorize avaliações externas ao treinador. Separe resultados medidos de propostas e explicite as limitações para transferir resultados publicados a esta rede.
