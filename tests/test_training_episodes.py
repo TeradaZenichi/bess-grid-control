@@ -190,6 +190,22 @@ class TrainingEpisodesTest(unittest.TestCase):
         self.assertEqual(trainer.env.train.idx, 2)
         self.assertEqual(trainer.replay.total, 8)
 
+    def test_parallel_windows_with_soc_actions_and_spaced_updates(self):
+        trainer = SACTrainer(eval_workers=2)
+        trainer.config.action_mode = "p_soc"
+        trainer.config.num_training_episodes = 1
+        trainer.config.learning_starts = trainer.config.batch_size = trainer.config.update_every = 2
+        trainer.episodes = [trainer.episodes[0] | {"episode_steps": 5}]
+        trainer.validation = [window | {"episode_steps": 2} for window in trainer.validation[:2]]
+        with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
+                lambda config, trial: Config.output_path(config, trial, root=directory)):
+            result = trainer.train()
+            training = json.loads((Path(result["output_path"]) / "training.jsonl").read_text())
+            self.assertEqual(training["updates"], 2)
+            monthly = result["evaluation"]["monthly"]
+            self.assertEqual([row["steps"] for row in monthly], [2, 2])
+            self.assertAlmostEqual(result["score"], -sum(row["adjusted_cost"] for row in monthly) / 4)
+
     def test_terminal_energy_is_settled_at_closing_buy_and_sell_tariffs(self):
         battery = SimpleNamespace(id="b1", e_cap_kwh=100, soc_init_frac=0.5, eta_charge=0.8,
                                   eta_discharge=0.9, array_charge_kw=[4], array_discharge_kw=[2])

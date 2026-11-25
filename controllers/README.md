@@ -737,3 +737,5 @@ Artifacts belong in `results/controllers/<type>/<architecture>/<mode>/<run>/`
 data split, seeds, code versions and checkpoint identity. Report differing
 observation/history budgets and distinguish discounted training returns from
 undiscounted economic scores. The teacher is optional for comparison or initialization.
+
+Pass `eval_workers=N` to `SACTrainer` to split validation windows across N CPU worker processes. The default uses one background thread. Set `update_every` to the number of environment steps between gradient updates (default 1).

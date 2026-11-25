@@ -20,7 +20,7 @@ from .actions import ActivePowerActions, bess_actions
 from ..normalization import ObservationScaling
 from torch.nn.functional import huber_loss
 from torch.optim.swa_utils import get_ema_multi_avg_fn
-from .evaluation import Evaluator
+from .evaluation import Evaluator, SACEvaluator
 from .observation import LocalObservation
 from ..episodes import split_episodes
 from . import Config
@@ -130,7 +130,8 @@ class ReplayBuffer:
 
 
 class SACTrainer:
-    def __init__(self, config=None):
+    def __init__(self, config=None, *, eval_workers=0):
+        self.eval_workers = eval_workers
         self.config = config if config is not None else Config()
         self.device = torch.device(self.config.device)
         torch.set_num_threads(self.config.cpu_threads)
@@ -215,6 +216,9 @@ class SACTrainer:
         with ExitStack() as resources:
             resources.callback(self.env.train.close)
             resources.callback(self.env.eval.close)
+            if self.eval_workers:
+                self.parallel_eval = resources.enter_context(SACEvaluator(self.config, self.data, self.validation, self.scaling,
+                    self.env.train.reward_function, workers=self.eval_workers))
             executor = resources.enter_context(ThreadPoolExecutor(max_workers=1))
             for index in trange(self.config.num_training_episodes, desc="Train episodes", unit="ep", position=0):
                 started = perf_counter()
@@ -245,7 +249,8 @@ class SACTrainer:
                         next_state = self.encode_local(next_observation) if next_observation is not None else None
                         self.replay.add(state, action, reward, next_state, terminated, truncated)
 
-                        if self.replay.total >= self.config.learning_starts and len(self.replay) >= self.config.batch_size:
+                        if (self.replay.total >= self.config.learning_starts and len(self.replay) >= self.config.batch_size
+                                and self.replay.total % self.config.update_every == 0):
                             for name, value in self.update(self.replay.sample()).items():
                                 totals[name] += value
                             updates += 1
