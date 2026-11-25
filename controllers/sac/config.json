@@ -2,6 +2,7 @@
   "device": "cpu",
   "action_mode": "per_phase",
   "cpu_threads": 4,
+  "collectors": 1,
   "observe_evse": false,
   "actor_lr": 0.0003,
   "critic_lr": 0.0003,

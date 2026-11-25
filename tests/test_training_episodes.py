@@ -91,7 +91,7 @@ class TrainingEpisodesTest(unittest.TestCase):
                     self.assertEqual(tuple(action.shape), (1, 6))
                     self.assertEqual(tuple(trainer.critic.q1(state, action).shape), (1, 1))
                     self.assertEqual(tuple(trainer.critic.q2(state, action).shape), (1, 1))
-                    for name, online in (("actor", trainer.actor), ("q1", trainer.critic.q1), ("q2", trainer.critic.q2)):
+                    for name, online in trainer.critic.named_children():
                         target = getattr(trainer.target, name)
                         for source, copied in zip(online.parameters(), target.parameters()):
                             torch.testing.assert_close(source, copied)
@@ -189,6 +189,26 @@ class TrainingEpisodesTest(unittest.TestCase):
         self.assertTrue(np.isfinite(result["score"]))
         self.assertEqual(trainer.env.train.idx, 2)
         self.assertEqual(trainer.replay.total, 8)
+
+    def test_two_collectors_preserve_windows_updates_and_validation(self):
+        trainer = SACTrainer()
+        trainer.config.collectors = trainer.config.num_training_episodes = 2
+        trainer.config.action_mode = "p_soc"
+        trainer.config.warmup_steps = 1
+        trainer.config.batch_size = trainer.config.learning_starts = 2
+        trainer.episodes = [window | {"episode_steps": steps} for window, steps in zip(trainer.episodes, (5, 3))]
+        trainer.validation = [trainer.validation[0] | {"episode_steps": 2}]
+        with TemporaryDirectory() as directory, patch("controllers.sac.Config.output_path",
+                lambda config, trial: Config.output_path(config, trial, root=directory)):
+            result = trainer.train()
+            output = Path(result["output_path"])
+            rows = [json.loads(line) for line in (output / "training.jsonl").read_text().splitlines()]
+            self.assertEqual(sorted(row["steps"] for row in rows), [2, 4])
+            self.assertEqual({row["start_step"] for row in rows}, {window["start_step"] for window in trainer.episodes})
+            self.assertEqual(sum(row["updates"] for row in rows), 5)
+            self.assertEqual(rows[-1]["total_steps"], 6)
+            self.assertEqual(len((output / "validation.jsonl").read_text().splitlines()), 2)
+            self.assertEqual(result["action_size"], 1)
 
     def test_parallel_windows_with_soc_actions_and_spaced_updates(self):
         trainer = SACTrainer(eval_workers=2)

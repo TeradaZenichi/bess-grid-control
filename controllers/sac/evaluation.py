@@ -7,12 +7,12 @@ from multiprocessing import get_context
 import torch
 from tqdm import tqdm
 
-from .actions import ActivePowerActions, bess_actions
-from opendss_environment import EnvironmentConfig, MicrogridEnv, Reward
+from .actions import ActivePowerActions
+from opendss_environment import Reward
 
 from . import Config
 from .networks import Actor, observation_batch
-from .observation import LocalObservation
+from .collection import Collector
 
 
 class Evaluator:
@@ -74,19 +74,11 @@ class SACEvaluator:
             self.env = None
 
     def _setup_local(self):
-        first = self.windows[0]
-        self.env = MicrogridEnv(EnvironmentConfig(self.config.case_path, first["episode_steps"],
-                                start_step=first["start_step"], reward_function=self.reward, observe_evse=self.config.observe_evse), data=self.data)
-        self.scope = {"bess": [self.config.bess_id]}
-        bess = self.config.bess(self.data)
-        self.observations = LocalObservation(bess, self.scaling, self.config.history_steps,
-                                             self.config.observation_timezone)
-        self.actions = bess_actions(bess, self.scaling.s_base_kva, self.config, self.data["phases"])
+        self.collector = Collector.create(self.config, self.scaling, self.reward, self.data, self.windows[0])
+        self.env, self.observations, self.actions = self.collector.env, self.collector.observations, self.collector.actions
 
     def encode_local(self, observation):
-        local = self.env.observe_controller(self.config.bus or self.observations.bus, self.scope,
-                                            observation=observation, extra_features=self.config.extra_features)
-        return self.observations.encode(local, flatten=self.config.flatten)
+        return self.collector.encode(observation)
 
     @torch.no_grad()
     def _evaluate_windows(self, actor, windows, *, show_progress=False, completed=None):
